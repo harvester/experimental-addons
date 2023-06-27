@@ -13,6 +13,7 @@ spec:
   valuesContent: |-
     hostname: "rancher.172.19.108.3.sslip.io"
     rancherVersion: "v2.7.4"
+    bootstrapPassword: "harvesterAdmin"
     vcluster:
       image: rancher/k3s:v1.25.10-k3s1
     sync:
@@ -61,5 +62,5 @@ spec:
             replicas: 1
             version: {{ .Values.rancherVersion }}
             global.cattle.psp.enabled: "false"
-            bootstrapPassword: password1234
+            bootstrapPassword: {{ .Values.bootstrapPassword }}
           helmVersion: v3
