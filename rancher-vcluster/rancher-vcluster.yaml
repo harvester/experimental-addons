@@ -11,9 +11,9 @@ spec:
   version: "v0.15.2"
   chart: vcluster
   valuesContent: |-
-    hostname: "rancher.172.19.108.3.sslip.io"
+    hostname: ""
     rancherVersion: "v2.7.4"
-    bootstrapPassword: "harvesterAdmin"
+    bootstrapPassword: ""
     vcluster:
       image: rancher/k3s:v1.25.10-k3s1
     sync:
