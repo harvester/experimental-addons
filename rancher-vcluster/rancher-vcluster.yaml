@@ -1,18 +1,23 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rancher-vcluster
+---
 apiVersion: harvesterhci.io/v1beta1
 kind: Addon
 metadata:
   name: rancher-vcluster
-  namespace: harvester-system
+  namespace: rancher-vcluster
   labels:
     addon.harvesterhci.io/experimental: "true"
 spec:
   enabled: false
-  repo: https://charts.loft.sh
+  repo: https://charts.harvesterhci.io
   version: "v0.15.2"
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.7.4"
+    rancherVersion: "v2.7.5"
     bootstrapPassword: ""
     vcluster:
       image: rancher/k3s:v1.25.10-k3s1
