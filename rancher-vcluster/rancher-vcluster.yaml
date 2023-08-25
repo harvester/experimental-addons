@@ -61,11 +61,11 @@ spec:
           targetNamespace: cattle-system
           repo: https://releases.rancher.com/server-charts/stable/
           chart: rancher
+          version: {{ .Values.rancherVersion }}
           set:
             ingress.tls.source: rancher
             hostname: {{ .Values.hostname }}
             replicas: 1
-            version: {{ .Values.rancherVersion }}
             global.cattle.psp.enabled: "false"
             bootstrapPassword: {{ .Values.bootstrapPassword }}
           helmVersion: v3
