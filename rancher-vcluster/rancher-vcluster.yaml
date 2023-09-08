@@ -17,7 +17,7 @@ spec:
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.7.5"
+    rancherVersion: "v2.7.6"
     bootstrapPassword: ""
     vcluster:
       image: rancher/k3s:v1.25.10-k3s1
