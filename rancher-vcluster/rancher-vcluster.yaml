@@ -94,7 +94,7 @@ spec:
         kind: Secret
         metadata:
           name: cloudflare-api-token-secret
-          namespace: cert-manager
+          namespace: cattle-system
         type: Opaque
         ---
         apiVersion: helm.cattle.io/v1
