@@ -17,7 +17,7 @@ spec:
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.7.7"
+    rancherVersion: "v2.7.6"
     bootstrapPassword: ""
     cloudflareEmail: ""
     cloudflareApiToken: ""
@@ -90,7 +90,7 @@ spec:
         ---
         apiVersion: v1
         data:
-          api-token: {{ .Values.cloudflareApiToken }}
+          api-token: {{ .Values.cloudflareApiToken | b64enc }}
         kind: Secret
         metadata:
           name: cloudflare-api-token-secret
