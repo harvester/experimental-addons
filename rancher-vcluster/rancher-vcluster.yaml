@@ -23,12 +23,12 @@ spec:
     cloudflareApiToken: ""
     vcluster:
       image: rancher/k3s:v1.25.10-k3s1
-      storage:
-        persistence: true
-        size: 50Gi
     sync:
       ingresses:
         enabled: "true"
+    storage:
+      persistence: true
+      size: 50Gi
     init:
       manifestsTemplate: |-
         apiVersion: v1
