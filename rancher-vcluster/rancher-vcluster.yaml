@@ -26,6 +26,9 @@ spec:
     sync:
       ingresses:
         enabled: "true"
+    storage:
+      persistence: true
+      size: 50Gi
     init:
       manifestsTemplate: |-
         apiVersion: v1
@@ -113,7 +116,4 @@ spec:
             replicas: 1
             global.cattle.psp.enabled: "false"
             bootstrapPassword: {{ .Values.bootstrapPassword }}
-            persistence:
-              enabled: true
-              size: 30Gi
           helmVersion: v3
