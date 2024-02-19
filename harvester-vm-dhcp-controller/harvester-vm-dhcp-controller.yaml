@@ -8,14 +8,6 @@ metadata:
 spec:
   enabled: false
   repo: https://charts.harvesterhci.io
-  version: "v0.1.0"
+  version: "v0.2.0"
   chart: harvester-vm-dhcp-controller
-  valuesContent: |
-    image:
-      tag: v0.1.0
-    agent:
-      image:
-        tag: v0.1.0
-    webhook:
-      image:
-        tag: v0.1.0
+  valuesContent: ""
