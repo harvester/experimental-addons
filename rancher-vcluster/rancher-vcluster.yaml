@@ -67,5 +67,5 @@ spec:
             hostname: {{ .Values.hostname }}
             replicas: 1
             global.cattle.psp.enabled: "false"
-            bootstrapPassword: {{ .Values.bootstrapPassword }}
+            bootstrapPassword: {{ .Values.bootstrapPassword | quote }}
           helmVersion: v3
