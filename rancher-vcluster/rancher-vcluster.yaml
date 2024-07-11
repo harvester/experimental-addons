@@ -19,11 +19,16 @@ spec:
     hostname: ""
     rancherVersion: "v2.8.2"
     bootstrapPassword: ""
+    cloudflareEmail: ""
+    cloudflareApiToken: ""
     vcluster:
       image: rancher/k3s:v1.27.10-k3s2
     sync:
       ingresses:
         enabled: "true"
+    storage:
+      persistence: true
+      size: 50Gi
     init:
       manifestsTemplate: |-
         apiVersion: v1
@@ -52,6 +57,49 @@ spec:
           set:
             installCRDs: "true"
         ---
+        apiVersion: cert-manager.io/v1alpha2
+        kind: Certificate
+        metadata:
+          name: tls-rancher-ingress
+          namespace: cattle-system
+        spec:
+          secretName: tls-rancher-ingress
+          commonName: {{ .Values.hostname }}
+          dnsNames:
+            - {{ .Values.hostname }}
+          issuerRef:
+            name: letsencrypt-production
+            kind: Issuer
+        ---
+        apiVersion: cert-manager.io/v1alpha2
+        kind: Issuer
+        metadata:
+          name: letsencrypt-production
+          namespace: cattle-system
+        spec:
+          acme:
+            email: {{ .Values.letsencrypt_email }}
+            preferredChain: ''
+            privateKeySecretRef:
+              name: letsencrypt-production
+            server: https://acme-v02.api.letsencrypt.org/directory
+            solvers:
+              - dns01:
+                  cloudflare:
+                    apiTokenSecretRef:
+                      key: api-token
+                      name: cloudflare-api-token-secret
+                    email: {{ .Values.cloudflareEmail }}
+        ---
+        apiVersion: v1
+        data:
+          api-token: {{ .Values.cloudflareApiToken | b64enc }}
+        kind: Secret
+        metadata:
+          name: cloudflare-api-token-secret
+          namespace: cattle-system
+        type: Opaque
+        ---
         apiVersion: helm.cattle.io/v1
         kind: HelmChart
         metadata:
@@ -63,7 +111,7 @@ spec:
           chart: rancher
           version: {{ .Values.rancherVersion }}
           set:
-            ingress.tls.source: rancher
+            ingress.tls.source: secret
             hostname: {{ .Values.hostname }}
             replicas: 1
             global.cattle.psp.enabled: "false"
