@@ -24,6 +24,10 @@ spec:
     sync:
       ingresses:
         enabled: "true"
+    syncer:
+      resources:
+        limits:
+          memory: 8Gi    
     init:
       manifestsTemplate: |-
         apiVersion: v1
