@@ -13,14 +13,14 @@ metadata:
 spec:
   enabled: false
   repo: https://charts.loft.sh
-  version: "v0.19.0"
+  version: "v0.22.0"
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.8.2"
+    rancherVersion: "v2.10.1"
     bootstrapPassword: ""
     vcluster:
-      image: rancher/k3s:v1.27.10-k3s2
+      image: rancher/k3s:v1.31.4+k3s1
     sync:
       ingresses:
         enabled: "true"
