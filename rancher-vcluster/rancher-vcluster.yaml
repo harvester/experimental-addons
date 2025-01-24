@@ -17,18 +17,22 @@ spec:
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.8.2"
+    rancherVersion: "v2.9.3"
     bootstrapPassword: ""
     cloudflareEmail: ""
     cloudflareApiToken: ""
     vcluster:
-      image: rancher/k3s:v1.27.10-k3s2
+      image: rancher/k3s:v1.28.15-k3s1
     sync:
       ingresses:
         enabled: "true"
     storage:
       persistence: true
       size: 50Gi
+    syncer:
+      resources:
+        limits:
+          memory: 8Gi
     init:
       manifestsTemplate: |-
         apiVersion: v1
