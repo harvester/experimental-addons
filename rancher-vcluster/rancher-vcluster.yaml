@@ -35,7 +35,7 @@ spec:
         accessKey: ""
         secretKey: ""
     vcluster:
-      image: rancher/k3s:v1.28.15-k3s1
+      image: rancher/k3s:v1.31.3-k3s1
     sync:
       ingresses:
         enabled: "true"
