@@ -30,6 +30,7 @@ spec:
       s3:
         bucketName: "my-backup-bucket"
         endpoint: "s3.amazonaws.com"
+        endpointCA: null
         region: "us-east-1"
         folder: "rancher-backups"
         accessKey: ""
@@ -190,6 +191,7 @@ spec:
               credentialSecretName: rancher-backup-s3-creds
               credentialSecretNamespace: cattle-resources-system
               endpoint: {{ .Values.rancherBackup.s3.endpoint }}
+              endpointCA: {{ .Values.rancherBackup.s3.endpointCA }}              
               folder: {{ .Values.rancherBackup.s3.folder }}
               region: {{ .Values.rancherBackup.s3.region }}
         {{- end }}
