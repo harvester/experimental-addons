@@ -134,6 +134,7 @@ spec:
             replicas: 1
             global.cattle.psp.enabled: "false"
             bootstrapPassword: {{ .Values.bootstrapPassword | quote }}
+            agentTLSMode: "system-store"
           helmVersion: v3
         {{- if .Values.rancherBackup.enabled }}
         ---
