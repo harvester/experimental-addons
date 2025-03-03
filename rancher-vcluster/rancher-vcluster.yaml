@@ -192,7 +192,7 @@ spec:
               credentialSecretName: rancher-backup-s3-creds
               credentialSecretNamespace: cattle-resources-system
               endpoint: {{ .Values.rancherBackup.s3.endpoint }}
-              endpointCA: {{ .Values.rancherBackup.s3.endpointCA }}              
+              endpointCA: {{ .Values.rancherBackup.s3.endpointCA | b64enc }}              
               folder: {{ .Values.rancherBackup.s3.folder }}
               region: {{ .Values.rancherBackup.s3.region }}
         {{- end }}
