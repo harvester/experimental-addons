@@ -10,6 +10,7 @@ metadata:
   namespace: rancher-vcluster
   labels:
     addon.harvesterhci.io/experimental: "true"
+    catalog.cattle.io/ui-component: "true"
 spec:
   enabled: false
   repo: https://charts.loft.sh
@@ -17,17 +18,35 @@ spec:
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.9.3"
+    rancherVersion: "v2.10.1"
     bootstrapPassword: ""
+    cloudflareEmail: ""
+    cloudflareApiToken: ""
+    rancherBackup:
+      enabled: false
+      chartVersion: "105.0.0+up6.0.0"
+      retentionCount: 30
+      schedule: "0 */12 * * *"
+      s3:
+        bucketName: "my-backup-bucket"
+        endpoint: "s3.amazonaws.com"
+        endpointCA: null
+        region: "us-east-1"
+        folder: "rancher-backups"
+        accessKey: ""
+        secretKey: ""
     vcluster:
-      image: rancher/k3s:v1.28.15-k3s1
+      image: rancher/k3s:v1.31.3-k3s1
     sync:
       ingresses:
         enabled: "true"
+    storage:
+      persistence: true
+      size: 50Gi
     syncer:
       resources:
         limits:
-          memory: 8Gi    
+          memory: 8Gi
     init:
       manifestsTemplate: |-
         apiVersion: v1
@@ -56,6 +75,49 @@ spec:
           set:
             installCRDs: "true"
         ---
+        apiVersion: cert-manager.io/v1alpha2
+        kind: Certificate
+        metadata:
+          name: tls-rancher-ingress
+          namespace: cattle-system
+        spec:
+          secretName: tls-rancher-ingress
+          commonName: {{ .Values.hostname }}
+          dnsNames:
+            - {{ .Values.hostname }}
+          issuerRef:
+            name: letsencrypt-production
+            kind: Issuer
+        ---
+        apiVersion: cert-manager.io/v1alpha2
+        kind: Issuer
+        metadata:
+          name: letsencrypt-production
+          namespace: cattle-system
+        spec:
+          acme:
+            email: {{ .Values.letsencrypt_email }}
+            preferredChain: ''
+            privateKeySecretRef:
+              name: letsencrypt-production
+            server: https://acme-v02.api.letsencrypt.org/directory
+            solvers:
+              - dns01:
+                  cloudflare:
+                    apiTokenSecretRef:
+                      key: api-token
+                      name: cloudflare-api-token-secret
+                    email: {{ .Values.cloudflareEmail }}
+        ---
+        apiVersion: v1
+        data:
+          api-token: {{ .Values.cloudflareApiToken | b64enc }}
+        kind: Secret
+        metadata:
+          name: cloudflare-api-token-secret
+          namespace: cattle-system
+        type: Opaque
+        ---
         apiVersion: helm.cattle.io/v1
         kind: HelmChart
         metadata:
@@ -67,9 +129,70 @@ spec:
           chart: rancher
           version: {{ .Values.rancherVersion }}
           set:
-            ingress.tls.source: rancher
+            ingress.tls.source: secret
             hostname: {{ .Values.hostname }}
             replicas: 1
             global.cattle.psp.enabled: "false"
             bootstrapPassword: {{ .Values.bootstrapPassword | quote }}
+            agentTLSMode: "system-store"
           helmVersion: v3
+        {{- if .Values.rancherBackup.enabled }}
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: cattle-resources-system
+        ---
+        apiVersion: helm.cattle.io/v1
+        kind: HelmChart
+        metadata:
+          name: rancher-backup-crd
+          namespace: kube-system
+        spec:
+          targetNamespace: cattle-resources-system
+          repo: https://charts.rancher.io
+          chart: rancher-backup-crd
+          version: {{ .Values.rancherBackup.chartVersion }}
+          helmVersion: v3
+        ---
+        apiVersion: helm.cattle.io/v1
+        kind: HelmChart
+        metadata:
+          name: rancher-backup
+          namespace: kube-system
+        spec:
+          targetNamespace: cattle-resources-system
+          repo: https://charts.rancher.io
+          chart: rancher-backup
+          version: {{ .Values.rancherBackup.chartVersion }}
+          helmVersion: v3
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: rancher-backup-s3-creds
+          namespace: cattle-resources-system
+        type: Opaque
+        data:
+          accessKey: {{ .Values.rancherBackup.s3.accessKey | b64enc }}
+          secretKey: {{ .Values.rancherBackup.s3.secretKey | b64enc }}
+        ---
+        apiVersion: resources.cattle.io/v1
+        kind: Backup
+        metadata:
+          name: rancher-backup
+          namespace: cattle-resources-system
+        spec:
+          resourceSetName: rancher-resource-set
+          retentionCount: {{ .Values.rancherBackup.retentionCount }}
+          schedule: {{ .Values.rancherBackup.schedule }}
+          storageLocation:
+            s3:
+              bucketName: {{ .Values.rancherBackup.s3.bucketName }}
+              credentialSecretName: rancher-backup-s3-creds
+              credentialSecretNamespace: cattle-resources-system
+              endpoint: {{ .Values.rancherBackup.s3.endpoint }}
+              endpointCA: {{ .Values.rancherBackup.s3.endpointCA | b64enc }}              
+              folder: {{ .Values.rancherBackup.s3.folder }}
+              region: {{ .Values.rancherBackup.s3.region }}
+        {{- end }}

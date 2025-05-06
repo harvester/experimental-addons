@@ -1,5 +1,11 @@
 # rancher-vcluster
 
+## Installation
+```bash
+kubectl apply -f https://raw.githubusercontent.com/iosifnicolae2/experimental-addons/refs/heads/main/rancher-vcluster/rancher-vcluster.yaml
+```
+
+
 The rancher-vcluster addon leverages [vcluster](https://github.com/loft-sh/vcluster) to create a vcluster named `rancher-vcluster` in the `harvester-system` namespace.
 
 The addon will also inject additional manifests to configure and install a fully functional rancher.
