@@ -18,7 +18,7 @@ spec:
   chart: vcluster
   valuesContent: |-
     hostname: ""
-    rancherVersion: "v2.10.1"
+    rancherVersion: v2.11.3
     bootstrapPassword: ""
     cloudflareEmail: ""
     cloudflareApiToken: ""
@@ -36,7 +36,7 @@ spec:
         accessKey: ""
         secretKey: ""
     vcluster:
-      image: rancher/k3s:v1.31.3-k3s1
+      image: rancher/k3s:v1.32.3-k3s1
     sync:
       ingresses:
         enabled: "true"
