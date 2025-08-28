@@ -12,18 +12,24 @@ metadata:
   labels:
     addon.harvesterhci.io/experimental: "true"
 spec:
-  enabled: true
+  enabled: false
   repo: https://charts.loft.sh
-  version: v0.26.0
+  version: v0.27.0
   chart: vcluster
   valuesContent: |-
     serviceCIDR: 10.53.0.0/16
     controlPlane:
       distro:
         k3s:
+          resources:
+            limits:
+              memory: 16096Mi
+              cpu: 8000m
           enabled: true
+          imagePullPolicy: IfNotPresent
           image:
-            tag: v1.33.2-k3s1
+            tag: v1.33.4-k3s1
+            repository: rancher/k3s
     sync:
       toHost:
         ingresses:
@@ -57,12 +63,12 @@ spec:
             - chart:
                 name: rancher
                 repo: https://releases.rancher.com/server-charts/latest
-                version: v2.12.0-rc2
+                version: v2.12.0
               release:
                 name: rancher
                 namespace: cattle-system
               values: |-
-                hostname: rancher.10.115.252.111.sslip.io
+                hostname: rancher.192.168.0.131.sslip.io
                 replicas: 1
                 bootstrapPassword: password1234
                 rancherImage: rancher/rancher
@@ -75,4 +81,4 @@ spec:
                       enabled: "false"
                 extraEnv:
                   - name: CATTLE_AGENT_IMAGE
-                    value: rancher/rancher-agent
+                    value: rancher/rancher-agent:v2.12.0
