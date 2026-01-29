@@ -10,4 +10,12 @@ spec:
   repo: https://charts.harvesterhci.io
   version: 1.7.0
   chart: harvester-vm-dhcp-controller
-  valuesContent: ""
+  valuesContent: |
+    image:
+      tag: v1.7.1-dev.0
+    webhook:
+      image:
+        tag: v1.7.1-dev.0
+    agent:
+      image:
+        tag: v1.7.1-dev.0
