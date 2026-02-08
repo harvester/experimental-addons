@@ -19,7 +19,7 @@ spec:
   valuesContent: |-
     global:
       hostname: ""
-      rancherVersion: v2.13.0 
+      rancherVersion: v2.13.2
       bootstrapPassword: ""
 
     sync:
@@ -47,7 +47,6 @@ spec:
         database:
           embedded:
             enabled: true
-
 
       statefulSet:
         image:
@@ -90,10 +89,10 @@ spec:
               targetNamespace: cert-manager
               repo: https://charts.jetstack.io
               chart: cert-manager
-              version: v1.5.1
+              version: v1.18.5
               helmVersion: v3
               set:
-                installCRDs: "true"
+                crds.enabled: "true"
             ---
             apiVersion: helm.cattle.io/v1
             kind: HelmChart
@@ -112,5 +111,3 @@ spec:
                 global.cattle.psp.enabled: "false"
                 bootstrapPassword: {{ .Values.global.bootstrapPassword }}
               helmVersion: v3
-
-
