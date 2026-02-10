@@ -19,7 +19,7 @@ spec:
   valuesContent: |-
     global:
       hostname: ""
-      rancherVersion: v2.13.0 
+      rancherVersion: v2.13.1
       bootstrapPassword: ""
 
     sync:
