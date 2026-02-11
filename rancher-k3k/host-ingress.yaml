@@ -1,0 +1,50 @@
+---
+# Host cluster resources to expose Rancher running inside the k3k virtual cluster.
+# Apply this to the HOST cluster (not inside k3k).
+#
+# IMPORTANT: The TLS secret (tls-rancher-ingress) must be copied from inside the
+# k3k cluster before this ingress will serve the correct certificate.
+# The deploy.sh script handles this automatically.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k3k-rancher-traefik
+  namespace: k3k-rancher
+spec:
+  type: ClusterIP
+  selector:
+    cluster: rancher
+    role: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+    - name: https
+      port: 443
+      targetPort: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: k3k-rancher-ingress
+  namespace: k3k-rancher
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - __HOSTNAME__
+      secretName: tls-rancher-ingress
+  rules:
+    - host: __HOSTNAME__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: k3k-rancher-traefik
+                port:
+                  number: 443

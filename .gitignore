@@ -1,0 +1,23 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.bak
+
+# Kubeconfig (never commit)
+kubeconfig*
+*.kubeconfig
+
+# Terraform (never commit)
+*.tfvars
+*.tfstate
+*.tfstate.backup
+.terraform/

@@ -1,0 +1,38 @@
+---
+# k3k Controller Addon
+# This deploys the k3k controller that manages virtual K3s clusters.
+# After enabling this addon, create a Cluster CR to spawn a virtual cluster.
+# See: rancher-cluster.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k3k-system
+---
+apiVersion: harvesterhci.io/v1beta1
+kind: Addon
+metadata:
+  name: k3k-controller
+  namespace: k3k-system
+  labels:
+    addon.harvesterhci.io/experimental: "true"
+spec:
+  enabled: false
+  repo: https://rancher.github.io/k3k
+  version: "1.0.1"
+  chart: k3k
+  valuesContent: |-
+    # k3k controller configuration
+    # See: https://github.com/rancher/k3k
+
+    # Controller replica count
+    replicaCount: 1
+
+    # Resource limits for the controller
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
