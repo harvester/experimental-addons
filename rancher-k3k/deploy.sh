@@ -241,7 +241,7 @@ fi
 # Step 1: Install/upgrade k3k controller via Helm
 # =============================================================================
 echo ""
-log "Step 1/8: Installing k3k controller..."
+log "Step 1/9: Installing k3k controller..."
 if is_oci "$K3K_REPO"; then
     # OCI: install directly from OCI URI (no helm repo add)
     if helm status k3k -n k3k-system &>/dev/null; then
@@ -310,7 +310,7 @@ fi
 # =============================================================================
 # Step 2: Create k3k virtual cluster
 # =============================================================================
-log "Step 2/8: Creating k3k virtual cluster..."
+log "Step 2/9: Creating k3k virtual cluster..."
 if kubectl get clusters.k3k.io "$K3K_CLUSTER" -n "$K3K_NS" &>/dev/null; then
     log "k3k cluster already exists, skipping"
 else
@@ -347,7 +347,7 @@ log "k3k cluster is Ready"
 # =============================================================================
 # Step 3: Extract kubeconfig
 # =============================================================================
-log "Step 3/8: Extracting kubeconfig..."
+log "Step 3/9: Extracting kubeconfig..."
 KUBECONFIG_FILE=$(mktemp)
 
 kubectl get secret "k3k-${K3K_CLUSTER}-kubeconfig" -n "$K3K_NS" \
@@ -423,7 +423,7 @@ fi
 # =============================================================================
 # Step 4: Deploy cert-manager
 # =============================================================================
-log "Step 4/8: Deploying cert-manager..."
+log "Step 4/9: Deploying cert-manager..."
 
 CERTMANAGER_MANIFEST=$(mktemp)
 sed -e "s|__CERTMANAGER_CHART__|${CERTMANAGER_CHART}|g" \
@@ -458,7 +458,7 @@ log "cert-manager is ready"
 # =============================================================================
 # Step 5: Deploy Rancher
 # =============================================================================
-log "Step 5/8: Deploying Rancher..."
+log "Step 5/9: Deploying Rancher..."
 
 RANCHER_MANIFEST=$(mktemp)
 sed -e "s|__HOSTNAME__|${HOSTNAME}|g" \
@@ -506,7 +506,7 @@ log "Rancher is running"
 # =============================================================================
 # Step 6: Copy TLS certificate to host cluster
 # =============================================================================
-log "Step 6/8: Copying Rancher TLS certificate to host cluster..."
+log "Step 6/9: Copying Rancher TLS certificate to host cluster..."
 
 ATTEMPTS=0
 while ! $K3K_CMD get secret tls-rancher-ingress -n cattle-system &>/dev/null; do
@@ -530,7 +530,7 @@ log "TLS certificate copied to host cluster"
 # =============================================================================
 # Step 7: Create host ingress
 # =============================================================================
-log "Step 7/8: Creating host cluster ingress..."
+log "Step 7/9: Creating host cluster ingress..."
 
 sed "s|__HOSTNAME__|${HOSTNAME}|g" "$SCRIPT_DIR/host-ingress.yaml" | kubectl apply -f -
 
@@ -539,13 +539,64 @@ log "Host ingress created"
 # =============================================================================
 # Step 8: Deploy ingress reconciler and watcher
 # =============================================================================
-log "Step 8/8: Deploying ingress reconciler and watcher..."
+log "Step 8/9: Deploying ingress reconciler and watcher..."
 
 sed "s|__HOSTNAME__|${HOSTNAME}|g" "$SCRIPT_DIR/ingress-reconciler.yaml" | kubectl apply -f -
 sed "s|__HOSTNAME__|${HOSTNAME}|g" "$SCRIPT_DIR/ingress-watcher.yaml" | kubectl apply -f -
 
 log "Ingress watcher deployed (reacts within 30s of pod restart)"
 log "Ingress reconciler deployed (safety net, checks every 5 minutes)"
+
+# =============================================================================
+# Step 9: Merge kubeconfig
+# =============================================================================
+log "Step 9/9: Merging kubeconfig with default config..."
+
+K3K_RENAMED=$(mktemp)
+cp "$KUBECONFIG_FILE" "$K3K_RENAMED"
+
+# Get original context/cluster/user names from k3k kubeconfig
+OLD_CTX=$(kubectl --kubeconfig="$K3K_RENAMED" config current-context 2>/dev/null || echo "default")
+OLD_CLUSTER=$(kubectl --kubeconfig="$K3K_RENAMED" config view --raw -o jsonpath='{.contexts[0].context.cluster}' 2>/dev/null || echo "default")
+OLD_USER=$(kubectl --kubeconfig="$K3K_RENAMED" config view --raw -o jsonpath='{.contexts[0].context.user}' 2>/dev/null || echo "default")
+
+log "Renaming context '${OLD_CTX}' -> 'rancher-k3k'"
+
+# Rename context (native kubectl support)
+kubectl --kubeconfig="$K3K_RENAMED" config rename-context "$OLD_CTX" rancher-k3k 2>/dev/null || true
+
+# Update context to reference rancher-k3k cluster and user
+kubectl --kubeconfig="$K3K_RENAMED" config set-context rancher-k3k --cluster=rancher-k3k --user=rancher-k3k >/dev/null
+
+# Rename cluster and user entry names (no native kubectl rename for these)
+if [[ -n "$OLD_CLUSTER" && "$OLD_CLUSTER" != "rancher-k3k" ]]; then
+    sedi "s|  name: ${OLD_CLUSTER}$|  name: rancher-k3k|" "$K3K_RENAMED"
+    sedi "s|^- name: ${OLD_CLUSTER}$|- name: rancher-k3k|" "$K3K_RENAMED"
+fi
+if [[ -n "$OLD_USER" && "$OLD_USER" != "rancher-k3k" ]]; then
+    sedi "s|  name: ${OLD_USER}$|  name: rancher-k3k|" "$K3K_RENAMED"
+    sedi "s|^- name: ${OLD_USER}$|- name: rancher-k3k|" "$K3K_RENAMED"
+fi
+
+# Set insecure-skip-tls-verify on the cluster entry
+kubectl --kubeconfig="$K3K_RENAMED" config set-cluster rancher-k3k --insecure-skip-tls-verify=true >/dev/null
+
+# Merge k3k config with default kubeconfig
+DATESTAMP=$(date +%Y%m%d)
+MERGED_KUBECONFIG="$(pwd)/merged.kubeconfig_${DATESTAMP}"
+
+if [[ -f "$HOME/.kube/config" ]]; then
+    export KUBECONFIG="$HOME/.kube/config:$K3K_RENAMED"
+    kubectl config view --flatten > "$MERGED_KUBECONFIG"
+    export KUBECONFIG=""
+    log "Merged kubeconfig: ${MERGED_KUBECONFIG}"
+else
+    warn "No default kubeconfig at ~/.kube/config, saving k3k config standalone"
+    cp "$K3K_RENAMED" "$MERGED_KUBECONFIG"
+fi
+
+rm -f "$K3K_RENAMED"
+log "Context 'rancher-k3k' ready in merged kubeconfig"
 
 # =============================================================================
 # Done
@@ -560,9 +611,15 @@ echo -e " Password:      ${BOOTSTRAP_PW}"
 echo -e " PVC Size:      ${PVC_SIZE}"
 [[ -n "$PRIVATE_REGISTRY" ]] && echo -e " Registry:      ${PRIVATE_REGISTRY}"
 echo ""
-echo -e " k3k kubeconfig: ${KUBECONFIG_FILE}"
+echo -e " k3k kubeconfig:    ${KUBECONFIG_FILE}"
+echo -e " Merged kubeconfig: ${MERGED_KUBECONFIG}"
 echo ""
-echo " To access the k3k cluster:"
+echo " To use the merged kubeconfig:"
+echo "   export KUBECONFIG=${MERGED_KUBECONFIG}"
+echo "   kubectl config use-context rancher-k3k"
+echo "   kubectl get pods -A"
+echo ""
+echo " To access k3k cluster directly:"
 echo "   export KUBECONFIG=${KUBECONFIG_FILE}"
 echo "   kubectl --insecure-skip-tls-verify get pods -A"
 echo ""

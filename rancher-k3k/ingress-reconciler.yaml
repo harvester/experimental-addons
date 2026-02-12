@@ -73,7 +73,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: reconciler
-              image: bitnami/kubectl:1.34
+              image: alpine/kubectl:1.34.2
               command:
                 - sh
                 - -c

@@ -34,7 +34,7 @@ spec:
       serviceAccountName: ingress-reconciler
       containers:
         - name: watcher
-          image: bitnami/kubectl:1.34
+          image: alpine/kubectl:1.34.2
           resources:
             requests:
               cpu: 10m
