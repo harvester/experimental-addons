@@ -12,10 +12,12 @@ Deploy Rancher management server using [k3k](https://github.com/rancher/k3k) (Ku
 
 The script prompts for hostname and password, then handles everything:
 1. Installs k3k controller
-2. Creates the virtual cluster (10Gi storage)
+2. Creates the virtual cluster (configurable storage)
 3. Deploys cert-manager + Rancher inside it
 4. Copies the TLS certificate to the host cluster
 5. Creates the nginx ingress for external access
+6. Deploys ingress reconciler (CronJob) and watcher (Deployment)
+7. Merges kubeconfig with `~/.kube/config`
 
 ## Architecture
 
@@ -207,13 +209,17 @@ resource "rancher2_cloud_credential" "harvester" {
 
 ```
 rancher-k3k/
-├── deploy.sh                # Automated deployment script
-├── destroy.sh               # Teardown script
+├── deploy.sh                # Automated 9-step deployment script
+├── destroy.sh               # Teardown with monitoring and verification
+├── lib.sh                   # Shared functions (sedi, OCI, auth injection)
 ├── terraform-setup.sh       # Terraform + kubeconfig setup (post-deploy)
-├── lib.sh                   # Shared functions (sedi, auth injection)
-├── test-private-repos.sh    # Tests for private repo support
+├── test-private-repos.sh    # 62 tests for private repo support
+├── k3k-controller.yaml      # Harvester addon CRD for k3k controller
 ├── rancher-cluster.yaml     # k3k Cluster CR (host cluster)
 ├── host-ingress.yaml        # Service + Ingress template (host cluster)
+├── ingress-reconciler.yaml  # CronJob: restores ingress every 5 min
+├── ingress-watcher.yaml     # Deployment: event-driven ingress recovery
+├── restore-ingress.sh       # Standalone ingress restoration script
 ├── post-install/            # Manifests for inside the k3k cluster
 │   ├── 01-cert-manager.yaml
 │   └── 02-rancher.yaml
