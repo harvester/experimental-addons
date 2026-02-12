@@ -8,13 +8,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: k3k-rancher
+  name: rancher-k3k
 ---
 apiVersion: k3k.io/v1beta1
 kind: Cluster
 metadata:
   name: rancher
-  namespace: k3k-rancher
+  namespace: rancher-k3k
 spec:
   # Virtual mode: complete isolation with dedicated K3s server pods
   mode: virtual

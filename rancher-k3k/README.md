@@ -24,8 +24,8 @@ The script prompts for hostname and password, then handles everything:
 ```
 External Traffic
   → rancher.example.com (Harvester VIP)
-    → nginx ingress (host cluster, k3k-rancher namespace)
-      → k3k-rancher-traefik service → k3k server pod :443
+    → nginx ingress (host cluster, rancher-k3k namespace)
+      → rancher-k3k-traefik service → k3k server pod :443
         → Traefik (inside k3k virtual cluster)
           → Rancher (cattle-system namespace)
 ```
@@ -37,10 +37,10 @@ External Traffic
 │  │  k3k-system namespace                          │  │
 │  │  └── k3k-controller                            │  │
 │  ├────────────────────────────────────────────────┤  │
-│  │  k3k-rancher namespace                         │  │
+│  │  rancher-k3k namespace                         │  │
 │  │  ├── k3k-rancher-server-0 (K3s virtual cluster)│  │
-│  │  ├── k3k-rancher-traefik (svc → pod :443)      │  │
-│  │  ├── k3k-rancher-ingress (nginx, with TLS)     │  │
+│  │  ├── rancher-k3k-traefik (svc → pod :443)      │  │
+│  │  ├── rancher-k3k-ingress (nginx, with TLS)     │  │
 │  │  └── tls-rancher-ingress (copied from k3k)     │  │
 │  └────────────────────────────────────────────────┘  │
 │                                                      │
@@ -119,19 +119,19 @@ kubectl wait --for=condition=available deploy/k3k -n k3k-system --timeout=120s
 ```bash
 kubectl apply -f rancher-cluster.yaml
 # Wait for Ready status
-kubectl get clusters.k3k.io rancher -n k3k-rancher -w
+kubectl get clusters.k3k.io rancher -n rancher-k3k -w
 ```
 
 ### Step 3: Extract and Fix Kubeconfig
 
 ```bash
 # Extract kubeconfig (key is kubeconfig.yaml, not kubeconfig)
-kubectl get secret k3k-rancher-kubeconfig -n k3k-rancher \
+kubectl get secret k3k-rancher-kubeconfig -n rancher-k3k \
     -o jsonpath='{.data.kubeconfig\.yaml}' | base64 -d > k3k-kubeconfig.yaml
 
 # The kubeconfig points to a ClusterIP — replace with NodePort
 NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-NODE_PORT=$(kubectl get svc k3k-rancher-service -n k3k-rancher \
+NODE_PORT=$(kubectl get svc k3k-rancher-service -n rancher-k3k \
     -o jsonpath='{.spec.ports[?(@.port==443)].nodePort}')
 
 # Edit k3k-kubeconfig.yaml: change server to https://<NODE_IP>:<NODE_PORT>
@@ -160,7 +160,7 @@ TLS_KEY=$(kubectl --insecure-skip-tls-verify -n cattle-system \
     get secret tls-rancher-ingress -o jsonpath='{.data.tls\.key}' | base64 -d)
 
 unset KUBECONFIG
-kubectl -n k3k-rancher create secret tls tls-rancher-ingress \
+kubectl -n rancher-k3k create secret tls tls-rancher-ingress \
     --cert=<(echo "$TLS_CRT") --key=<(echo "$TLS_KEY")
 
 # Apply ingress (replace __HOSTNAME__ with your hostname)
@@ -325,18 +325,18 @@ Or manually:
 
 ```bash
 # Remove host ingress and TLS secret
-kubectl delete ingress k3k-rancher-ingress -n k3k-rancher
-kubectl delete svc k3k-rancher-traefik -n k3k-rancher
-kubectl delete secret tls-rancher-ingress -n k3k-rancher
+kubectl delete ingress rancher-k3k-ingress -n rancher-k3k
+kubectl delete svc rancher-k3k-traefik -n rancher-k3k
+kubectl delete secret tls-rancher-ingress -n rancher-k3k
 
 # Delete the virtual cluster
-kubectl delete clusters.k3k.io rancher -n k3k-rancher
+kubectl delete clusters.k3k.io rancher -n rancher-k3k
 
 # Uninstall k3k controller
 helm uninstall k3k -n k3k-system
 
 # Clean up namespaces
-kubectl delete ns k3k-rancher k3k-system
+kubectl delete ns rancher-k3k k3k-system
 ```
 
 ## Troubleshooting
@@ -344,7 +344,7 @@ kubectl delete ns k3k-rancher k3k-system
 ### Cluster not starting
 ```bash
 kubectl logs -n k3k-system deployment/k3k
-kubectl describe clusters.k3k.io rancher -n k3k-rancher
+kubectl describe clusters.k3k.io rancher -n rancher-k3k
 ```
 
 ### Rancher image pull fails (no space)

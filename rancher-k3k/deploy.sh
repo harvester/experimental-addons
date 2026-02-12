@@ -15,7 +15,7 @@ set -euo pipefail
 #   - In-place upgrades (re-run with new versions)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-K3K_NS="k3k-rancher"
+K3K_NS="rancher-k3k"
 K3K_CLUSTER="rancher"
 KUBECONFIG_FILE=""
 

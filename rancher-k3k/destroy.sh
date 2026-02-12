@@ -4,7 +4,7 @@ set -euo pipefail
 # Destroy Rancher k3k deployment on Harvester
 # This removes all k3k resources from the cluster and monitors teardown progress.
 
-K3K_NS="k3k-rancher"
+K3K_NS="rancher-k3k"
 K3K_CLUSTER="rancher"
 
 # Colors
@@ -35,17 +35,17 @@ monitor_ns() {
 
 echo -e "${YELLOW}This will destroy the k3k Rancher deployment.${NC}"
 echo "The following will be removed:"
-echo "  - Ingress watcher, reconciler CronJob, RBAC (k3k-rancher namespace)"
-echo "  - Host cluster ingress, service, and TLS secret (k3k-rancher namespace)"
+echo "  - Ingress watcher, reconciler CronJob, RBAC (rancher-k3k namespace)"
+echo "  - Host cluster ingress, service, and TLS secret (rancher-k3k namespace)"
 echo "  - k3k virtual cluster and all data inside it"
 echo "  - k3k controller (Helm release)"
 echo "  - rancher-k3k context/cluster/user from ~/.kube/config"
-echo "  - k3k-rancher and k3k-system namespaces"
+echo "  - rancher-k3k and k3k-system namespaces"
 echo ""
 
 # --- Pre-flight: Show current state ---
 echo -e "${CYAN}Current resource state:${NC}"
-monitor_ns "$K3K_NS" "k3k-rancher"
+monitor_ns "$K3K_NS" "rancher-k3k"
 monitor_ns "k3k-system" "k3k-system"
 if kubectl get clusters.k3k.io "$K3K_CLUSTER" -n "$K3K_NS" &>/dev/null; then
     STATUS=$(kubectl get clusters.k3k.io "$K3K_CLUSTER" -n "$K3K_NS" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
@@ -77,8 +77,8 @@ kubectl delete serviceaccount ingress-reconciler -n "$K3K_NS" 2>/dev/null && log
 
 # --- Step 2: Remove host ingress resources ---
 log "Step 2/6: Removing host cluster ingress resources..."
-kubectl delete ingress k3k-rancher-ingress -n "$K3K_NS" 2>/dev/null && log "  Ingress deleted" || warn "  Ingress not found"
-kubectl delete svc k3k-rancher-traefik -n "$K3K_NS" 2>/dev/null && log "  Service deleted" || warn "  Service not found"
+kubectl delete ingress rancher-k3k-ingress -n "$K3K_NS" 2>/dev/null && log "  Ingress deleted" || warn "  Ingress not found"
+kubectl delete svc rancher-k3k-traefik -n "$K3K_NS" 2>/dev/null && log "  Service deleted" || warn "  Service not found"
 kubectl delete secret tls-rancher-ingress -n "$K3K_NS" 2>/dev/null && log "  TLS secret deleted" || warn "  TLS secret not found"
 
 # --- Step 3: Delete virtual cluster ---

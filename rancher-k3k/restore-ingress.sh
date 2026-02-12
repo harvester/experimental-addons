@@ -11,7 +11,7 @@ set -euo pipefail
 #   ./restore-ingress.sh                          # auto-detect hostname from k3k cluster
 #   ./restore-ingress.sh rancher.example.com      # specify hostname explicitly
 
-K3K_NS="k3k-rancher"
+K3K_NS="rancher-k3k"
 K3K_CLUSTER="rancher"
 
 # Colors
@@ -90,9 +90,9 @@ INGRESS_EXISTS=false
 TLS_EXISTS=false
 SVC_EXISTS=false
 
-kubectl get ingress k3k-rancher-ingress -n "$K3K_NS" &>/dev/null && INGRESS_EXISTS=true
+kubectl get ingress rancher-k3k-ingress -n "$K3K_NS" &>/dev/null && INGRESS_EXISTS=true
 kubectl get secret tls-rancher-ingress -n "$K3K_NS" &>/dev/null && TLS_EXISTS=true
-kubectl get svc k3k-rancher-traefik -n "$K3K_NS" &>/dev/null && SVC_EXISTS=true
+kubectl get svc rancher-k3k-traefik -n "$K3K_NS" &>/dev/null && SVC_EXISTS=true
 
 echo -e "${YELLOW}Current state:${NC}"
 echo "  Ingress:     $( $INGRESS_EXISTS && echo 'exists' || echo 'MISSING' )"
@@ -113,7 +113,7 @@ if ! $SVC_EXISTS; then
 apiVersion: v1
 kind: Service
 metadata:
-  name: k3k-rancher-traefik
+  name: rancher-k3k-traefik
   namespace: $K3K_NS
 spec:
   type: ClusterIP
@@ -171,7 +171,7 @@ if ! $INGRESS_EXISTS; then
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: k3k-rancher-ingress
+  name: rancher-k3k-ingress
   namespace: $K3K_NS
   annotations:
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
@@ -189,7 +189,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: k3k-rancher-traefik
+                name: rancher-k3k-traefik
                 port:
                   number: 443
 EOF
@@ -203,6 +203,6 @@ echo ""
 echo "  URL: https://$HOSTNAME"
 echo ""
 echo "  Verify with:"
-echo "    kubectl get ingress k3k-rancher-ingress -n $K3K_NS"
+echo "    kubectl get ingress rancher-k3k-ingress -n $K3K_NS"
 echo "    curl -sk https://$HOSTNAME/ping"
 echo ""

@@ -21,13 +21,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ingress-reconciler
-  namespace: k3k-rancher
+  namespace: rancher-k3k
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ingress-reconciler
-  namespace: k3k-rancher
+  namespace: rancher-k3k
 rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
@@ -46,11 +46,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ingress-reconciler
-  namespace: k3k-rancher
+  namespace: rancher-k3k
 subjects:
   - kind: ServiceAccount
     name: ingress-reconciler
-    namespace: k3k-rancher
+    namespace: rancher-k3k
 roleRef:
   kind: Role
   name: ingress-reconciler
@@ -60,7 +60,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: ingress-reconciler
-  namespace: k3k-rancher
+  namespace: rancher-k3k
 spec:
   schedule: "*/5 * * * *"
   successfulJobsHistoryLimit: 1
@@ -81,14 +81,14 @@ spec:
                   echo "=== Ingress reconciliation ==="
 
                   # Ensure Service exists
-                  kubectl get svc k3k-rancher-traefik -n k3k-rancher &>/dev/null || {
+                  kubectl get svc rancher-k3k-traefik -n rancher-k3k &>/dev/null || {
                     echo "Service missing, recreating..."
                     kubectl apply -f - <<'SVC'
                   apiVersion: v1
                   kind: Service
                   metadata:
-                    name: k3k-rancher-traefik
-                    namespace: k3k-rancher
+                    name: rancher-k3k-traefik
+                    namespace: rancher-k3k
                   spec:
                     type: ClusterIP
                     selector:
@@ -105,14 +105,14 @@ spec:
                   }
 
                   # Ensure Ingress exists
-                  kubectl get ingress k3k-rancher-ingress -n k3k-rancher &>/dev/null || {
+                  kubectl get ingress rancher-k3k-ingress -n rancher-k3k &>/dev/null || {
                     echo "Ingress missing, recreating..."
                     kubectl apply -f - <<'ING'
                   apiVersion: networking.k8s.io/v1
                   kind: Ingress
                   metadata:
-                    name: k3k-rancher-ingress
-                    namespace: k3k-rancher
+                    name: rancher-k3k-ingress
+                    namespace: rancher-k3k
                     annotations:
                       nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
                   spec:
@@ -129,7 +129,7 @@ spec:
                               pathType: Prefix
                               backend:
                                 service:
-                                  name: k3k-rancher-traefik
+                                  name: rancher-k3k-traefik
                                   port:
                                     number: 443
                   ING
@@ -138,28 +138,28 @@ spec:
                   echo "=== Flannel crash recovery ==="
 
                   # Check if k3k server pod is in CrashLoopBackOff
-                  POD_STATUS=$(kubectl get pod k3k-rancher-server-0 -n k3k-rancher -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+                  POD_STATUS=$(kubectl get pod k3k-rancher-server-0 -n rancher-k3k -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
 
                   if [ "$POD_STATUS" = "CrashLoopBackOff" ]; then
                     echo "Pod in CrashLoopBackOff, checking logs..."
 
                     # Check if it's the flannel network policy controller error
-                    LOGS=$(kubectl logs k3k-rancher-server-0 -n k3k-rancher --previous --tail=5 2>/dev/null || echo "")
+                    LOGS=$(kubectl logs k3k-rancher-server-0 -n rancher-k3k --previous --tail=5 2>/dev/null || echo "")
 
                     if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
                       echo "Flannel network policy crash detected!"
 
                       # Ensure --disable-network-policy is in serverArgs
-                      CURRENT_ARGS=$(kubectl get clusters.k3k.io rancher -n k3k-rancher -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
+                      CURRENT_ARGS=$(kubectl get clusters.k3k.io rancher -n rancher-k3k -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
                       if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
                         echo "Patching Cluster CR with --disable-network-policy..."
-                        kubectl patch clusters.k3k.io rancher -n k3k-rancher --type=merge \
+                        kubectl patch clusters.k3k.io rancher -n rancher-k3k --type=merge \
                           -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
                       fi
 
                       # Delete the pod to reset backoff timer and pick up new args
                       echo "Deleting pod to reset backoff and apply new args..."
-                      kubectl delete pod k3k-rancher-server-0 -n k3k-rancher --grace-period=0 2>/dev/null || true
+                      kubectl delete pod k3k-rancher-server-0 -n rancher-k3k --grace-period=0 2>/dev/null || true
 
                     else
                       echo "CrashLoopBackOff is not flannel-related, skipping"

@@ -18,7 +18,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ingress-watcher
-  namespace: k3k-rancher
+  namespace: rancher-k3k
   labels:
     app: ingress-watcher
 spec:
@@ -46,7 +46,7 @@ spec:
             - sh
             - -c
             - |
-              NS="k3k-rancher"
+              NS="rancher-k3k"
               POD="k3k-rancher-server-0"
               CLUSTER="rancher"
               HOSTNAME="__HOSTNAME__"
@@ -57,14 +57,14 @@ spec:
               reconcile_ingress() {
                   log "=== Ingress reconciliation ==="
 
-                  kubectl get svc k3k-rancher-traefik -n "$NS" &>/dev/null || {
+                  kubectl get svc rancher-k3k-traefik -n "$NS" &>/dev/null || {
                       log "Service missing, recreating..."
                       kubectl apply -f - <<'SVC'
               apiVersion: v1
               kind: Service
               metadata:
-                name: k3k-rancher-traefik
-                namespace: k3k-rancher
+                name: rancher-k3k-traefik
+                namespace: rancher-k3k
               spec:
                 type: ClusterIP
                 selector:
@@ -80,14 +80,14 @@ spec:
               SVC
                   }
 
-                  kubectl get ingress k3k-rancher-ingress -n "$NS" &>/dev/null || {
+                  kubectl get ingress rancher-k3k-ingress -n "$NS" &>/dev/null || {
                       log "Ingress missing, recreating..."
                       cat <<EOF | kubectl apply -f -
               apiVersion: networking.k8s.io/v1
               kind: Ingress
               metadata:
-                name: k3k-rancher-ingress
-                namespace: k3k-rancher
+                name: rancher-k3k-ingress
+                namespace: rancher-k3k
                 annotations:
                   nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
               spec:
@@ -104,7 +104,7 @@ spec:
                           pathType: Prefix
                           backend:
                             service:
-                              name: k3k-rancher-traefik
+                              name: rancher-k3k-traefik
                               port:
                                 number: 443
               EOF

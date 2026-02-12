@@ -16,7 +16,7 @@ set -euo pipefail
 # All output files are covered by .gitignore and must not be committed.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-K3K_NS="k3k-rancher"
+K3K_NS="rancher-k3k"
 K3K_CLUSTER="rancher"
 
 # Restrict file permissions — output files contain secrets
@@ -71,7 +71,7 @@ fi
 log "k3k cluster is Ready"
 
 # Detect hostname from ingress
-HOSTNAME=$(kubectl get ingress k3k-rancher-ingress -n "$K3K_NS" \
+HOSTNAME=$(kubectl get ingress rancher-k3k-ingress -n "$K3K_NS" \
     -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || echo "")
 if [[ -z "$HOSTNAME" ]]; then
     read -rp "Could not detect hostname. Enter Rancher hostname: " HOSTNAME
