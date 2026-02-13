@@ -1,0 +1,44 @@
+---
+# Deploy Rancher inside the k3k cluster
+# Apply this to the k3k cluster (not the host cluster)
+#
+# Placeholders replaced by deploy.sh:
+#   __HOSTNAME__             - Rancher URL
+#   __BOOTSTRAP_PW__         - Initial admin password
+#   __RANCHER_REPO_LINE__    - "  repo: <url>" for HTTP, removed for OCI
+#   __RANCHER_CHART__        - Chart name (HTTP) or full OCI URI
+#   __RANCHER_VERSION__      - Rancher chart version
+#   __TLS_SOURCE__           - TLS certificate source (rancher/letsEncrypt/secret)
+#   __EXTRA_RANCHER_VALUES__ - Additional Helm set values (optional)
+#   __AUTH_SECRET_LINE1/2__  - HelmChart auth (injected by lib.sh)
+#   __REPO_CA_LINE1/2__     - HelmChart repoCAConfigMap (injected by lib.sh)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cattle-system
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: rancher
+  namespace: kube-system
+spec:
+  targetNamespace: cattle-system
+__RANCHER_REPO_LINE__
+  chart: __RANCHER_CHART__
+  version: __RANCHER_VERSION__
+  helmVersion: v3
+__AUTH_SECRET_LINE1__
+__AUTH_SECRET_LINE2__
+__REPO_CA_LINE1__
+__REPO_CA_LINE2__
+  set:
+    ingress.tls.source: __TLS_SOURCE__
+    hostname: __HOSTNAME__
+    replicas: 1
+    global.cattle.psp.enabled: "false"
+    # Disable Fleet - not usable in North-South boundary where South cannot reach Git
+    features: "fleet=false"
+    bootstrapPassword: __BOOTSTRAP_PW__
+__EXTRA_RANCHER_VALUES__

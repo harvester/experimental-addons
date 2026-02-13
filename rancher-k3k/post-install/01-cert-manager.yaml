@@ -1,0 +1,28 @@
+---
+# Deploy cert-manager inside the k3k cluster
+# Apply this to the k3k cluster (not the host cluster)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    certmanager.k8s.io/disable-validation: "true"
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: cert-manager
+  namespace: kube-system
+spec:
+  targetNamespace: cert-manager
+__CERTMANAGER_REPO_LINE__
+  chart: __CERTMANAGER_CHART__
+  version: __CERTMANAGER_VERSION__
+  helmVersion: v3
+__AUTH_SECRET_LINE1__
+__AUTH_SECRET_LINE2__
+__REPO_CA_LINE1__
+__REPO_CA_LINE2__
+  set:
+    crds.enabled: "true"
