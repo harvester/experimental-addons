@@ -202,6 +202,8 @@ REGEOF
 # If PRIVATE_REGISTRY is set, injects --system-default-registry serverArg.
 # Otherwise removes the placeholders.
 #
+# Requires k3k >= v1.0.2-rc2 (PR #570 added secretMounts to the CRD).
+#
 # Usage: inject_secret_mounts <manifest-file>
 # Reads: PRIVATE_REGISTRY, PRIVATE_CA_PATH
 inject_secret_mounts() {
@@ -216,10 +218,12 @@ inject_secret_mounts() {
             echo "    - secretName: k3s-registry-config"
             echo "      mountPath: /etc/rancher/k3s/registries.yaml"
             echo "      subPath: registries.yaml"
+            echo "      role: all"
             if [[ -n "${PRIVATE_CA_PATH:-}" ]]; then
                 echo "    - secretName: k3s-registry-ca"
                 echo "      mountPath: /etc/rancher/k3s/tls/ca.crt"
                 echo "      subPath: ca.crt"
+                echo "      role: all"
             fi
         } > "$mounts_file"
 

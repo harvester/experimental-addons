@@ -19,7 +19,7 @@ metadata:
 spec:
   enabled: false
   repo: https://rancher.github.io/k3k
-  version: "1.0.1"
+  version: "1.0.2-rc2"
   chart: k3k
   valuesContent: |-
     # k3k controller configuration

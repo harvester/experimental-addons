@@ -91,7 +91,9 @@ The pod enters CrashLoopBackOff until it is rescheduled back to a node with a ma
 
 ### Experimental status
 
-k3k v1.0.1 is the current stable release. The [v1.1.0 milestone](https://github.com/rancher/k3k/milestone/3) is in development.
+k3k v1.0.2-rc2 is the minimum required version. The stable v1.0.2 release is pending.
+v1.0.2 adds `secretMounts` ([PR #570](https://github.com/rancher/k3k/pull/570)) which is required
+for private CA and container registry support.
 
 ## Known Issues
 
@@ -110,7 +112,7 @@ If you prefer not to use the script:
 
 ```bash
 helm repo add k3k https://rancher.github.io/k3k
-helm install k3k k3k/k3k --namespace k3k-system --create-namespace --version 1.0.1
+helm install k3k k3k/k3k --namespace k3k-system --create-namespace --version 1.0.2-rc2
 kubectl wait --for=condition=available deploy/k3k -n k3k-system --timeout=120s
 ```
 
@@ -213,7 +215,7 @@ rancher-k3k/
 ├── destroy.sh               # Teardown with monitoring and verification
 ├── lib.sh                   # Shared functions (sedi, OCI, auth injection)
 ├── terraform-setup.sh       # Terraform + kubeconfig setup (post-deploy)
-├── test-private-repos.sh    # 62 tests for private repo support
+├── test-private-repos.sh    # 63 tests for private repo support
 ├── k3k-controller.yaml      # Harvester addon CRD for k3k controller
 ├── rancher-cluster.yaml     # k3k Cluster CR (host cluster)
 ├── host-ingress.yaml        # Service + Ingress template (host cluster)
@@ -255,6 +257,11 @@ The CA is propagated to:
   `kube-system` referenced via `spec.repoCAConfigMap`
 
 ### Private Container Registry
+
+> **Requires k3k >= v1.0.2-rc2.** The `secretMounts` field
+> ([PR #570](https://github.com/rancher/k3k/pull/570)) is needed to mount
+> `registries.yaml` and CA certificates into k3k server pods. v1.0.1 does not
+> have this field and will reject the Cluster CR.
 
 Enter the registry host (e.g. `harbor.example.com`) when prompted.
 The script generates containerd mirror entries for three upstream registries:
@@ -338,6 +345,25 @@ helm uninstall k3k -n k3k-system
 # Clean up namespaces
 kubectl delete ns rancher-k3k k3k-system
 ```
+
+## Changelog
+
+### 2026-02-12: k3k v1.0.2-rc2 + private CA support
+
+- **Bump k3k 1.0.1 → 1.0.2-rc2**: Required for `secretMounts` support
+  ([PR #570](https://github.com/rancher/k3k/pull/570)). v1.0.1 does not have
+  the `secretMounts` field in the Cluster CRD, causing `kubectl apply` to reject
+  the manifest when a private registry is configured.
+- **Private CA support**: The `secretMounts` field allows mounting `registries.yaml`
+  and CA certificates directly into k3k server/agent pods at
+  `/etc/rancher/k3s/registries.yaml` and `/etc/rancher/k3s/tls/ca.crt`. This
+  enables containerd inside the virtual cluster to trust private CAs for image
+  pulls from Harbor, Artifactory, or other internal registries.
+- **Auth prompt UX**: Helm repo authentication is now gated behind a yes/no
+  question (`Do your Helm repos require authentication?`). Public repos no
+  longer show username/password prompts.
+- **`role: all`**: Secret mounts now include `role: all` to ensure both server
+  and agent pods receive the registry configuration.
 
 ## Troubleshooting
 

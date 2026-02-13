@@ -548,7 +548,7 @@ fi
 
 # --- Test 12: inject_secret_mounts with private registry + CA ---
 echo ""
-echo "Test 12: inject_secret_mounts with private registry + CA"
+echo "Test 12: inject_secret_mounts with private registry + CA (requires k3k >= v1.0.2-rc2)"
 PRIVATE_REGISTRY="harbor.example.com" PRIVATE_CA_PATH="/tmp/fake-ca.pem"
 cp "$SCRIPT_DIR/rancher-cluster.yaml" "$TMPDIR_TEST/cluster-registry.yaml"
 sedi "s|__PVC_SIZE__|10Gi|g" "$TMPDIR_TEST/cluster-registry.yaml"
@@ -583,6 +583,12 @@ if yaml_contains "registries.yaml" "$TMPDIR_TEST/cluster-registry.yaml"; then
     pass "registries.yaml mountPath/subPath present"
 else
     fail "registries.yaml" "registries.yaml mount not found"
+fi
+
+if yaml_contains "role: all" "$TMPDIR_TEST/cluster-registry.yaml"; then
+    pass "role: all set on secret mounts"
+else
+    fail "role: all" "Expected role: all on secret mounts"
 fi
 
 if yaml_contains "system-default-registry=harbor.example.com/docker.io" "$TMPDIR_TEST/cluster-registry.yaml"; then

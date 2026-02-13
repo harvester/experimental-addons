@@ -101,8 +101,8 @@ RANCHER_VERSION="${RANCHER_VERSION:-v2.13.2}"
 read -rp "k3k source [https://rancher.github.io/k3k]: " K3K_REPO
 K3K_REPO="${K3K_REPO:-https://rancher.github.io/k3k}"
 
-read -rp "k3k version [1.0.1]: " K3K_VERSION
-K3K_VERSION="${K3K_VERSION:-1.0.1}"
+read -rp "k3k version [1.0.2-rc2]: " K3K_VERSION
+K3K_VERSION="${K3K_VERSION:-1.0.2-rc2}"
 
 # --- Private registry (optional) ---
 echo ""
@@ -110,6 +110,7 @@ echo -e "${CYAN}Private Container Registry (press Enter to skip):${NC}"
 echo "  Enter the registry host (e.g. harbor.example.com)."
 echo "  Containerd mirrors are generated for: docker.io, quay.io, ghcr.io"
 echo "  Each requires a matching proxy cache project in Harbor."
+echo "  Requires k3k >= v1.0.2-rc2 (secretMounts support)."
 read -rp "Private registry host []: " PRIVATE_REGISTRY
 PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-}"
 
@@ -123,12 +124,17 @@ PRIVATE_CA_PATH="${PRIVATE_CA_PATH:-}"
 
 # --- Helm repo authentication (optional) ---
 echo ""
-echo -e "${CYAN}Helm Repository Authentication (press Enter to skip):${NC}"
-echo "  Required for private Harbor/Artifactory/Nexus repos."
-read -rp "Helm repo username []: " HELM_REPO_USER
-HELM_REPO_USER="${HELM_REPO_USER:-}"
+HELM_REPO_USER=""
 HELM_REPO_PASS=""
-if [[ -n "$HELM_REPO_USER" ]]; then
+read -rp "Do your Helm repos require authentication? (yes/no) [no]: " HELM_AUTH_NEEDED
+HELM_AUTH_NEEDED="${HELM_AUTH_NEEDED:-no}"
+if [[ "$HELM_AUTH_NEEDED" == "yes" ]]; then
+    echo -e "${CYAN}Helm Repository Authentication:${NC}"
+    read -rp "Helm repo username: " HELM_REPO_USER
+    if [[ -z "$HELM_REPO_USER" ]]; then
+        err "Username is required when authentication is enabled"
+        exit 1
+    fi
     read -rsp "Helm repo password: " HELM_REPO_PASS
     echo ""
     if [[ -z "$HELM_REPO_PASS" ]]; then
@@ -165,7 +171,7 @@ echo "  k3k:              $K3K_REPO ($K3K_VERSION)$(is_oci "$K3K_REPO" && echo '
 echo "  TLS Source:       $TLS_SOURCE"
 [[ -n "$PRIVATE_REGISTRY" ]] && echo "  Registry:         $PRIVATE_REGISTRY (mirrors: docker.io, quay.io, ghcr.io)"
 [[ -n "$PRIVATE_CA_PATH" ]] && echo "  CA Cert:          $PRIVATE_CA_PATH"
-[[ -n "$HELM_REPO_USER" ]] && echo "  Helm Auth:        $HELM_REPO_USER / ****"
+[[ -n "$HELM_REPO_USER" ]] && echo "  Helm Auth:        $HELM_REPO_USER / ****" || echo "  Helm Auth:        none (public repos)"
 echo ""
 read -rp "Proceed? (yes/no) [yes]: " CONFIRM
 CONFIRM="${CONFIRM:-yes}"
