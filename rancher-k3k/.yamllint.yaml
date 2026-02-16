@@ -1,0 +1,12 @@
+---
+ignore: |
+  test/
+  post-install/
+  rancher-cluster.yaml
+
+rules:
+  document-start: disable
+  line-length:
+    max: 200
+  truthy:
+    check-keys: false

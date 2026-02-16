@@ -236,11 +236,12 @@ if [[ -n "$PRIVATE_CA_PATH" ]]; then
     EXTRA_RANCHER_VALUES="${EXTRA_RANCHER_VALUES}    privateCA: \"true\"\n"
 fi
 
-# Format for YAML indentation (under spec.set:)
+# Write extra values to a temp file for multi-line sed substitution
 if [[ -n "$EXTRA_RANCHER_VALUES" ]]; then
-    EXTRA_RANCHER_VALUES=$(echo -e "$EXTRA_RANCHER_VALUES")
+    EXTRA_VALUES_FILE=$(mktemp)
+    echo -e "$EXTRA_RANCHER_VALUES" > "$EXTRA_VALUES_FILE"
 else
-    EXTRA_RANCHER_VALUES=""
+    EXTRA_VALUES_FILE=""
 fi
 
 # =============================================================================
@@ -481,9 +482,19 @@ else
     sedi "/__RANCHER_REPO_LINE__/d" "$RANCHER_MANIFEST"
 fi
 
-# Inject extra values (private registry, private CA)
-if [[ -n "$EXTRA_RANCHER_VALUES" ]]; then
-    sedi "s|^__EXTRA_RANCHER_VALUES__$|${EXTRA_RANCHER_VALUES}|" "$RANCHER_MANIFEST"
+# Inject extra values (private registry, private CA) using line-by-line replacement
+# (sed 's' command cannot handle embedded newlines in the replacement string)
+if [[ -n "$EXTRA_VALUES_FILE" ]]; then
+    TMPFILE=$(mktemp)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "__EXTRA_RANCHER_VALUES__" ]]; then
+            cat "$EXTRA_VALUES_FILE"
+        else
+            printf '%s\n' "$line"
+        fi
+    done < "$RANCHER_MANIFEST" > "$TMPFILE"
+    mv "$TMPFILE" "$RANCHER_MANIFEST"
+    rm -f "$EXTRA_VALUES_FILE"
 else
     sedi "/__EXTRA_RANCHER_VALUES__/d" "$RANCHER_MANIFEST"
 fi
@@ -566,26 +577,26 @@ OLD_CTX=$(kubectl --kubeconfig="$K3K_RENAMED" config current-context 2>/dev/null
 OLD_CLUSTER=$(kubectl --kubeconfig="$K3K_RENAMED" config view --raw -o jsonpath='{.contexts[0].context.cluster}' 2>/dev/null || echo "default")
 OLD_USER=$(kubectl --kubeconfig="$K3K_RENAMED" config view --raw -o jsonpath='{.contexts[0].context.user}' 2>/dev/null || echo "default")
 
-log "Renaming context '${OLD_CTX}' -> 'rancher-k3k'"
+log "Renaming context '${OLD_CTX}' -> 'rancher-test'"
 
 # Rename context (native kubectl support)
-kubectl --kubeconfig="$K3K_RENAMED" config rename-context "$OLD_CTX" rancher-k3k 2>/dev/null || true
+kubectl --kubeconfig="$K3K_RENAMED" config rename-context "$OLD_CTX" rancher-test 2>/dev/null || true
 
-# Update context to reference rancher-k3k cluster and user
-kubectl --kubeconfig="$K3K_RENAMED" config set-context rancher-k3k --cluster=rancher-k3k --user=rancher-k3k >/dev/null
+# Update context to reference rancher-test cluster and user
+kubectl --kubeconfig="$K3K_RENAMED" config set-context rancher-test --cluster=rancher-test --user=rancher-test >/dev/null
 
 # Rename cluster and user entry names (no native kubectl rename for these)
-if [[ -n "$OLD_CLUSTER" && "$OLD_CLUSTER" != "rancher-k3k" ]]; then
-    sedi "s|  name: ${OLD_CLUSTER}$|  name: rancher-k3k|" "$K3K_RENAMED"
-    sedi "s|^- name: ${OLD_CLUSTER}$|- name: rancher-k3k|" "$K3K_RENAMED"
+if [[ -n "$OLD_CLUSTER" && "$OLD_CLUSTER" != "rancher-test" ]]; then
+    sedi "s|  name: ${OLD_CLUSTER}$|  name: rancher-test|" "$K3K_RENAMED"
+    sedi "s|^- name: ${OLD_CLUSTER}$|- name: rancher-test|" "$K3K_RENAMED"
 fi
-if [[ -n "$OLD_USER" && "$OLD_USER" != "rancher-k3k" ]]; then
-    sedi "s|  name: ${OLD_USER}$|  name: rancher-k3k|" "$K3K_RENAMED"
-    sedi "s|^- name: ${OLD_USER}$|- name: rancher-k3k|" "$K3K_RENAMED"
+if [[ -n "$OLD_USER" && "$OLD_USER" != "rancher-test" ]]; then
+    sedi "s|  name: ${OLD_USER}$|  name: rancher-test|" "$K3K_RENAMED"
+    sedi "s|^- name: ${OLD_USER}$|- name: rancher-test|" "$K3K_RENAMED"
 fi
 
 # Set insecure-skip-tls-verify on the cluster entry
-kubectl --kubeconfig="$K3K_RENAMED" config set-cluster rancher-k3k --insecure-skip-tls-verify=true >/dev/null
+kubectl --kubeconfig="$K3K_RENAMED" config set-cluster rancher-test --insecure-skip-tls-verify=true >/dev/null
 
 # Merge k3k config with default kubeconfig
 DATESTAMP=$(date +%Y%m%d)
@@ -602,7 +613,7 @@ else
 fi
 
 rm -f "$K3K_RENAMED"
-log "Context 'rancher-k3k' ready in merged kubeconfig"
+log "Context 'rancher-test' ready in merged kubeconfig"
 
 # =============================================================================
 # Done
@@ -622,7 +633,7 @@ echo -e " Merged kubeconfig: ${MERGED_KUBECONFIG}"
 echo ""
 echo " To use the merged kubeconfig:"
 echo "   export KUBECONFIG=${MERGED_KUBECONFIG}"
-echo "   kubectl config use-context rancher-k3k"
+echo "   kubectl config use-context rancher-test"
 echo "   kubectl get pods -A"
 echo ""
 echo " To access k3k cluster directly:"

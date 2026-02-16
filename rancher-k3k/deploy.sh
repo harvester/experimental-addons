@@ -236,11 +236,12 @@ if [[ -n "$PRIVATE_CA_PATH" ]]; then
     EXTRA_RANCHER_VALUES="${EXTRA_RANCHER_VALUES}    privateCA: \"true\"\n"
 fi
 
-# Format for YAML indentation (under spec.set:)
+# Write extra values to a temp file for multi-line sed substitution
 if [[ -n "$EXTRA_RANCHER_VALUES" ]]; then
-    EXTRA_RANCHER_VALUES=$(echo -e "$EXTRA_RANCHER_VALUES")
+    EXTRA_VALUES_FILE=$(mktemp)
+    echo -e "$EXTRA_RANCHER_VALUES" > "$EXTRA_VALUES_FILE"
 else
-    EXTRA_RANCHER_VALUES=""
+    EXTRA_VALUES_FILE=""
 fi
 
 # =============================================================================
@@ -481,9 +482,19 @@ else
     sedi "/__RANCHER_REPO_LINE__/d" "$RANCHER_MANIFEST"
 fi
 
-# Inject extra values (private registry, private CA)
-if [[ -n "$EXTRA_RANCHER_VALUES" ]]; then
-    sedi "s|^__EXTRA_RANCHER_VALUES__$|${EXTRA_RANCHER_VALUES}|" "$RANCHER_MANIFEST"
+# Inject extra values (private registry, private CA) using line-by-line replacement
+# (sed 's' command cannot handle embedded newlines in the replacement string)
+if [[ -n "$EXTRA_VALUES_FILE" ]]; then
+    TMPFILE=$(mktemp)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "__EXTRA_RANCHER_VALUES__" ]]; then
+            cat "$EXTRA_VALUES_FILE"
+        else
+            printf '%s\n' "$line"
+        fi
+    done < "$RANCHER_MANIFEST" > "$TMPFILE"
+    mv "$TMPFILE" "$RANCHER_MANIFEST"
+    rm -f "$EXTRA_VALUES_FILE"
 else
     sedi "/__EXTRA_RANCHER_VALUES__/d" "$RANCHER_MANIFEST"
 fi

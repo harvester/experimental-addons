@@ -150,10 +150,10 @@ spec:
                       echo "Flannel network policy crash detected!"
 
                       # Ensure --disable-network-policy is in serverArgs
-                      CURRENT_ARGS=$(kubectl get clusters.k3k.io rancher -n k3k-test -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
+                      CURRENT_ARGS=$(kubectl get clusters.k3k.io test -n k3k-test -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
                       if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
                         echo "Patching Cluster CR with --disable-network-policy..."
-                        kubectl patch clusters.k3k.io rancher -n k3k-test --type=merge \
+                        kubectl patch clusters.k3k.io test -n k3k-test --type=merge \
                           -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
                       fi
 

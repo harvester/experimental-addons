@@ -48,7 +48,7 @@ spec:
             - |
               NS="k3k-test"
               POD="k3k-test-server-0"
-              CLUSTER="rancher"
+              CLUSTER="test"
               HOSTNAME="__HOSTNAME__"
               POLL_INTERVAL=10
 
