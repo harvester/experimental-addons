@@ -1,5 +1,7 @@
 # Multi-Cluster Observability Architecture
 
+> **Status: PROPOSAL** -- This document describes a planned architecture that has not yet been implemented.
+
 Plan for monitoring 15+ remote RKE2 clusters from a centralized observability stack.
 
 ## Design Principles
@@ -12,7 +14,7 @@ Plan for monitoring 15+ remote RKE2 clusters from a centralized observability st
 
 ## Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │                    Central Observability Cluster                     │
 │                                                                      │
@@ -49,7 +51,7 @@ Plan for monitoring 15+ remote RKE2 clusters from a centralized observability st
 ### Central Cluster
 
 | Component | Purpose | Replicas | Pool |
-|-----------|---------|----------|------|
+| --- | --- | --- | --- |
 | **Grafana Mimir** | Long-term metrics storage (Prometheus-compatible) | 3 ingesters, 2 queriers, 2 distributors | general + database |
 | **Grafana Loki** | Log aggregation and querying | 3 ingesters, 2 queriers, 2 distributors | general + database |
 | **Grafana** | Unified dashboards and alerting UI | 2 (HA) | general |
@@ -60,7 +62,7 @@ Plan for monitoring 15+ remote RKE2 clusters from a centralized observability st
 ### Per-Cluster Agents
 
 | Component | Purpose | Resources |
-|-----------|---------|-----------|
+| --- | --- | --- |
 | **Grafana Alloy** | Metrics collection + remote_write + log shipping | 1 DaemonSet + 1 Deployment |
 | **kube-state-metrics** | Kubernetes object metrics | 1 pod |
 | **node-exporter** | Node-level metrics | DaemonSet |
@@ -69,7 +71,7 @@ Plan for monitoring 15+ remote RKE2 clusters from a centralized observability st
 
 ### Ingestion Flow
 
-```
+```text
 Cluster N:
   kubelet metrics ──┐
   kube-state-metrics ┤
@@ -120,6 +122,7 @@ prometheus.remote_write "mimir" {
 ### Multi-Tenancy
 
 Each cluster writes with a unique `X-Scope-OrgID` header. Mimir uses this for:
+
 - **Isolation**: Cluster A cannot query Cluster B's metrics
 - **Limits**: Per-tenant rate limits, series limits, retention
 - **Query**: Grafana datasource per tenant, or multi-tenant queries via `|` separator
@@ -139,9 +142,9 @@ overrides:
 
 ## Logging Pipeline (Loki)
 
-### Ingestion Flow
+### Log Ingestion Flow
 
-```
+```text
 Cluster N:
   container stdout/stderr ──→ Alloy (tail) ──→ Loki Distributor
   systemd journal ──────────→ Alloy (journal)        │
@@ -186,7 +189,7 @@ loki.write "central" {
 ### Metrics (Mimir)
 
 | Metric | Value |
-|--------|-------|
+| --- | --- |
 | Active series per cluster | ~300,000 |
 | Total active series (15 clusters) | ~4,500,000 |
 | Ingestion rate | ~150,000 samples/sec |
@@ -197,7 +200,7 @@ loki.write "central" {
 ### Logs (Loki)
 
 | Metric | Value |
-|--------|-------|
+| --- | --- |
 | Log volume per cluster | ~5 GB/day |
 | Total log volume (15 clusters) | ~75 GB/day |
 | 30-day retention | ~2.3 TB |
@@ -206,7 +209,7 @@ loki.write "central" {
 ### Central Cluster Sizing
 
 | Resource | Sizing |
-|----------|--------|
+| --- | --- |
 | Control plane nodes | 3 x 4 vCPU / 16 GB |
 | General workers | 4 x 8 vCPU / 32 GB |
 | Database workers | 4 x 4 vCPU / 16 GB + 2 TB disk each |
@@ -219,7 +222,7 @@ loki.write "central" {
 ### Bandwidth Per Cluster
 
 | Traffic | Bandwidth |
-|---------|-----------|
+| --- | --- |
 | Metrics remote_write | ~2-5 Mbps (compressed, batched) |
 | Log shipping | ~5-15 Mbps (depends on log volume) |
 | **Total per cluster** | **~10-20 Mbps** |
@@ -227,7 +230,7 @@ loki.write "central" {
 
 ### Firewall Rules
 
-```
+```text
 Remote Cluster → Central Cluster:
   - TCP 443: Mimir push endpoint (HTTPS)
   - TCP 443: Loki push endpoint (HTTPS)
@@ -250,12 +253,12 @@ route:
   receiver: default
   group_by: [cluster, namespace, alertname]
   routes:
-    - match:
-        severity: critical
+    - matchers:
+        - severity = "critical"
       receiver: pagerduty
       group_wait: 30s
-    - match:
-        severity: warning
+    - matchers:
+        - severity = "warning"
       receiver: mattermost
       group_wait: 5m
 
@@ -276,6 +279,7 @@ All alerts automatically include the `cluster` label, so routing can differentia
 ## Deployment Strategy
 
 ### Phase 1: Foundation (Week 1-2)
+
 1. Deploy dedicated observability cluster (or add to existing management cluster)
 2. Deploy MinIO (4-node erasure coding)
 3. Deploy CNPG PostgreSQL for Grafana
@@ -284,6 +288,7 @@ All alerts automatically include the `cluster` label, so routing can differentia
 6. Deploy Grafana with Mimir + Loki datasources
 
 ### Phase 2: First Cluster (Week 3)
+
 1. Deploy Alloy on one pilot cluster
 2. Validate metrics flow (remote_write → Mimir → Grafana)
 3. Validate log flow (Alloy → Loki → Grafana)
@@ -291,12 +296,14 @@ All alerts automatically include the `cluster` label, so routing can differentia
 5. Configure initial alerts
 
 ### Phase 3: Rollout (Week 4-6)
+
 1. Create Alloy Helm values template with per-cluster variables
 2. Deploy Alloy to remaining 14 clusters via ArgoCD ApplicationSet
 3. Configure per-tenant limits in Mimir/Loki
 4. Build cross-cluster dashboards (fleet overview)
 
 ### Phase 4: Maturity (Week 7-8)
+
 1. Configure alert routing (Mattermost, PagerDuty)
 2. Set up recording rules for expensive queries
 3. Configure log retention policies per tenant
@@ -306,7 +313,7 @@ All alerts automatically include the `cluster` label, so routing can differentia
 ## Helm Charts
 
 | Component | Chart | Version |
-|-----------|-------|---------|
+| --- | --- | --- |
 | Grafana Mimir | `grafana/mimir-distributed` | latest |
 | Grafana Loki | `grafana/loki` | latest |
 | Grafana | `grafana/grafana` | latest |
@@ -317,7 +324,7 @@ All alerts automatically include the `cluster` label, so routing can differentia
 ## Comparison with Alternatives
 
 | Approach | Pros | Cons |
-|----------|------|------|
+| --- | --- | --- |
 | **Mimir + Loki (recommended)** | Proven at scale, multi-tenant native, S3 backend, Grafana ecosystem | Operational complexity, requires object storage |
 | Thanos | Prometheus-compatible, cheaper sidecar model | Weaker multi-tenancy, complex compaction |
 | Victoria Metrics | Lower resource usage, simpler | Single-vendor, weaker ecosystem |

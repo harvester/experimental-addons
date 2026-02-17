@@ -97,7 +97,7 @@ $K3K_CMD patch clusters.management.cattle.io <cluster-id> --type=merge \
 ## Summary of the Three Checksums
 
 | Component | How it computes hash | Hash value | Source of expected hash |
-|-----------|---------------------|------------|----------------------|
+| --------- | ------------------- | ---------- | -------------------- |
 | Rancher server (Go) | `sha256(raw_string)` | `9cb34b49...` | Computes internally |
 | Cluster agent (shell) | `jq -r .value > file && sha256sum file` | `a204fbc2...` | `CATTLE_CA_CHECKSUM` env var (from Rancher: `9cb34b49...`) |
 | System agent install.sh | `curl /cacerts \| sha256sum` | `9cb34b49...` | `stv-aggregation` secret (from cluster agent: `a204fbc2...`) |
