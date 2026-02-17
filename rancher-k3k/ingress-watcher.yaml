@@ -1,13 +1,13 @@
 ---
-# Deployment that watches k3k-rancher-server-0 and triggers reconciliation
+# Deployment that watches all k3k server pods and triggers reconciliation
 # within seconds of a pod restart, instead of waiting for the CronJob's
-# 5-minute cycle.
+# 5-minute cycle. Supports both single-node and HA (3-node) clusters.
 #
 # Handles two scenarios:
-#   1. Pod becomes Ready after reschedule — waits for k3k controller to
+#   1. Any pod becomes Ready after reschedule — waits for k3k controller to
 #      finish reconciling (which deletes the host Ingress), then recreates it.
-#   2. Pod enters CrashLoopBackOff with flannel error — patches the Cluster
-#      CR with --disable-network-policy and resets the pod.
+#   2. Any pod enters CrashLoopBackOff with flannel error — patches the Cluster
+#      CR with --disable-network-policy and resets that specific pod.
 #
 # The CronJob (ingress-reconciler) is kept as a safety net.
 #
@@ -47,12 +47,17 @@ spec:
             - -c
             - |
               NS="rancher-k3k"
-              POD="k3k-rancher-server-0"
               CLUSTER="rancher"
               HOSTNAME="__HOSTNAME__"
               POLL_INTERVAL=10
+              STATE_DIR="/tmp/watcher-state"
 
+              mkdir -p "$STATE_DIR"
               log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+
+              # Per-pod state helpers (file-based to support dynamic pod count)
+              get_state() { cat "$STATE_DIR/$1.$2" 2>/dev/null || echo ""; }
+              set_state() { printf '%s' "$3" > "$STATE_DIR/$1.$2"; }
 
               reconcile_ingress() {
                   log "=== Ingress reconciliation ==="
@@ -114,12 +119,13 @@ spec:
               }
 
               recover_flannel() {
-                  log "=== Flannel crash recovery ==="
+                  local pod_name="$1"
+                  log "=== Flannel crash recovery for $pod_name ==="
 
-                  LOGS=$(kubectl logs "$POD" -n "$NS" --previous --tail=5 2>/dev/null || echo "")
+                  LOGS=$(kubectl logs "$pod_name" -n "$NS" --previous --tail=5 2>/dev/null || echo "")
 
                   if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
-                      log "Flannel network policy crash confirmed"
+                      log "Flannel network policy crash confirmed on $pod_name"
 
                       CURRENT_ARGS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
                           -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
@@ -130,10 +136,10 @@ spec:
                               -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
                       fi
 
-                      log "Deleting pod to reset backoff timer..."
-                      kubectl delete pod "$POD" -n "$NS" --grace-period=0 2>/dev/null || true
+                      log "Deleting pod $pod_name to reset backoff timer..."
+                      kubectl delete pod "$pod_name" -n "$NS" --grace-period=0 2>/dev/null || true
                   else
-                      log "CrashLoopBackOff is not flannel-related, skipping"
+                      log "CrashLoopBackOff on $pod_name is not flannel-related, skipping"
                   fi
 
                   log "=== Flannel crash recovery complete ==="
@@ -142,52 +148,55 @@ spec:
               # --- Main watch loop ---
               log "Starting k3k pod watcher (poll every ${POLL_INTERVAL}s)"
 
-              RECONCILED_POD_UID=""
-              FLANNEL_RECOVERED_POD_UID=""
-              LAST_WAITING=""
-
               while true; do
-                  INFO=$(kubectl get pod "$POD" -n "$NS" \
-                      -o jsonpath='{.metadata.uid}|{.status.containerStatuses[0].ready}|{.status.containerStatuses[0].state.waiting.reason}' \
-                      2>/dev/null || echo "||")
+                  # Discover all server pods via label selector
+                  PODS=$(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
 
-                  POD_UID=$(echo "$INFO" | cut -d'|' -f1)
-                  READY=$(echo "$INFO" | cut -d'|' -f2)
-                  WAITING=$(echo "$INFO" | cut -d'|' -f3)
+                  for POD in $PODS; do
+                      INFO=$(kubectl get pod "$POD" -n "$NS" \
+                          -o jsonpath='{.metadata.uid}|{.status.containerStatuses[0].ready}|{.status.containerStatuses[0].state.waiting.reason}' \
+                          2>/dev/null || echo "||")
 
-                  # --- Scenario 1: Pod became Ready after restart ---
-                  if [ "$READY" = "true" ] && [ -n "$POD_UID" ] && [ "$POD_UID" != "$RECONCILED_POD_UID" ]; then
-                      log "Pod Ready (UID: $POD_UID) — waiting for k3k controller to finish..."
+                      POD_UID=$(echo "$INFO" | cut -d'|' -f1)
+                      READY=$(echo "$INFO" | cut -d'|' -f2)
+                      WAITING=$(echo "$INFO" | cut -d'|' -f3)
 
-                      # Wait for k3k Cluster status to be Ready (controller done reconciling)
-                      ATTEMPTS=0
-                      while [ $ATTEMPTS -lt 30 ]; do
-                          STATUS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
-                              -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-                          if [ "$STATUS" = "Ready" ]; then
-                              break
-                          fi
-                          ATTEMPTS=$((ATTEMPTS + 1))
-                          sleep 5
-                      done
+                      # --- Scenario 1: Pod became Ready after restart ---
+                      RECONCILED_UID=$(get_state "$POD" "reconciled_uid")
+                      if [ "$READY" = "true" ] && [ -n "$POD_UID" ] && [ "$POD_UID" != "$RECONCILED_UID" ]; then
+                          log "Pod $POD Ready (UID: $POD_UID) — waiting for k3k controller to finish..."
 
-                      # Extra delay — k3k controller may still be cleaning up
-                      # resources after setting status to Ready
-                      log "Cluster Ready, waiting 15s for cleanup to settle..."
-                      sleep 15
+                          ATTEMPTS=0
+                          while [ $ATTEMPTS -lt 30 ]; do
+                              STATUS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                              if [ "$STATUS" = "Ready" ]; then
+                                  break
+                              fi
+                              ATTEMPTS=$((ATTEMPTS + 1))
+                              sleep 5
+                          done
 
-                      reconcile_ingress
-                      RECONCILED_POD_UID="$POD_UID"
-                  fi
+                          log "Cluster Ready, waiting 15s for cleanup to settle..."
+                          sleep 15
 
-                  # --- Scenario 2: Flannel CrashLoopBackOff ---
-                  if [ "$WAITING" = "CrashLoopBackOff" ] && [ "$LAST_WAITING" != "CrashLoopBackOff" ] \
-                     && [ "$POD_UID" != "$FLANNEL_RECOVERED_POD_UID" ]; then
-                      log "CrashLoopBackOff detected (UID: $POD_UID)"
-                      recover_flannel
-                      FLANNEL_RECOVERED_POD_UID="$POD_UID"
-                  fi
+                          reconcile_ingress
+                          set_state "$POD" "reconciled_uid" "$POD_UID"
+                      fi
 
-                  LAST_WAITING="$WAITING"
+                      # --- Scenario 2: Flannel CrashLoopBackOff ---
+                      LAST_WAITING=$(get_state "$POD" "last_waiting")
+                      FLANNEL_UID=$(get_state "$POD" "flannel_uid")
+                      if [ "$WAITING" = "CrashLoopBackOff" ] && [ "$LAST_WAITING" != "CrashLoopBackOff" ] \
+                         && [ "$POD_UID" != "$FLANNEL_UID" ]; then
+                          log "CrashLoopBackOff detected on $POD (UID: $POD_UID)"
+                          recover_flannel "$POD"
+                          set_state "$POD" "flannel_uid" "$POD_UID"
+                      fi
+
+                      set_state "$POD" "last_waiting" "$WAITING"
+                  done
+
                   sleep "$POLL_INTERVAL"
               done

@@ -133,10 +133,13 @@ inject_helmchart_auth() {
 
 # Upstream registries that the Rancher-on-k3k stack pulls from.
 # Each needs a corresponding proxy cache project in Harbor.
-#   docker.io  - K3s system images, Rancher, Fleet
-#   quay.io    - cert-manager (jetstack)
-#   ghcr.io    - CloudNativePG, Zalando postgres-operator
-MIRROR_REGISTRIES=("docker.io" "quay.io" "ghcr.io")
+#   docker.io       - K3s system images, Rancher, Fleet
+#   quay.io         - cert-manager (jetstack)
+#   ghcr.io         - CloudNativePG, Zalando postgres-operator
+#   registry.k8s.io - Kubernetes system images (metrics-server, coredns, pause)
+#   gcr.io          - Google container images (legacy k8s images)
+#   docker.elastic.co - Elasticsearch, Kibana
+MIRROR_REGISTRIES=("docker.io" "quay.io" "ghcr.io" "registry.k8s.io" "gcr.io" "docker.elastic.co")
 
 # Generate a K3s registries.yaml with mirror entries for all upstream registries.
 # Writes the YAML to the file path given as the first argument.

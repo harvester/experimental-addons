@@ -3,9 +3,21 @@ set -euo pipefail
 
 # Destroy TEST vcluster
 # This removes the TEST k3k cluster and all associated resources.
+#
+# Usage: ./destroy-test.sh [-y]
 
 K3K_NS="k3k-test"
 K3K_CLUSTER="test"
+
+# --- Flags ---
+AUTO_CONFIRM=false
+while getopts "y" opt; do
+    case $opt in
+        y) AUTO_CONFIRM=true ;;
+        *) echo "Usage: $0 [-y]"; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -21,8 +33,12 @@ echo -e "${YELLOW}This will destroy the TEST vcluster:${NC}"
 echo "  Namespace: ${K3K_NS}"
 echo "  Cluster:   ${K3K_CLUSTER}"
 echo ""
-read -rp "Are you sure? (yes/no) [no]: " CONFIRM
-CONFIRM="${CONFIRM:-no}"
+if $AUTO_CONFIRM; then
+    CONFIRM="yes"
+else
+    read -rp "Are you sure? (yes/no) [no]: " CONFIRM
+    CONFIRM="${CONFIRM:-no}"
+fi
 if [[ "$CONFIRM" != "yes" ]]; then
     log "Aborted."
     exit 0

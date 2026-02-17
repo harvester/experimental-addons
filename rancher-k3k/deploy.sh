@@ -5,7 +5,10 @@ set -euo pipefail
 # This script orchestrates the full deployment including TLS cert propagation.
 # Re-running this script with updated versions will upgrade existing components.
 #
+# Usage: ./deploy.sh [-c config_file]
+#
 # Supports:
+#   - Non-interactive mode via config file (-c flag)
 #   - Custom PVC sizing (10Gi to 1000Gi+)
 #   - Private Helm chart repos (cert-manager, Rancher)
 #   - OCI-based Helm registries (oci://harbor.example.com/project/chart)
@@ -41,6 +44,43 @@ trap cleanup_on_error EXIT
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
+# --- Config file support ---
+CONFIG_FILE=""
+while getopts "c:" opt; do
+    case $opt in
+        c) CONFIG_FILE="$OPTARG" ;;
+        *) echo "Usage: $0 [-c config_file]"; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [[ -n "$CONFIG_FILE" ]]; then
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        err "Config file not found: $CONFIG_FILE"
+        exit 1
+    fi
+    log "Loading config from: $CONFIG_FILE"
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# prompt_or_default VAR "prompt text" "default_value"
+# If VAR is already set (from config file), skip the prompt.
+# If no config file, prompt interactively; if config file, use the default.
+prompt_or_default() {
+    local var_name="$1" prompt_text="$2" default_val="$3"
+    if [[ -z "${!var_name:-}" ]]; then
+        if [[ -n "$CONFIG_FILE" ]]; then
+            printf -v "$var_name" '%s' "$default_val"
+        else
+            read -rp "$prompt_text" "$var_name"
+            if [[ -z "${!var_name:-}" ]]; then
+                printf -v "$var_name" '%s' "$default_val"
+            fi
+        fi
+    fi
+}
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -50,14 +90,19 @@ echo -e "${CYAN}=============================================${NC}"
 echo ""
 
 # --- Required ---
-read -rp "Rancher hostname (e.g. rancher.example.com): " HOSTNAME
+if [[ -z "${HOSTNAME:-}" ]]; then
+    if [[ -n "$CONFIG_FILE" ]]; then
+        err "HOSTNAME is required but not set in config file"
+        exit 1
+    fi
+    read -rp "Rancher hostname (e.g. rancher.example.com): " HOSTNAME
+fi
 if [[ -z "$HOSTNAME" ]]; then
     err "Hostname is required"
     exit 1
 fi
 
-read -rp "Bootstrap password (min 12 chars) [admin1234567]: " BOOTSTRAP_PW
-BOOTSTRAP_PW="${BOOTSTRAP_PW:-admin1234567}"
+prompt_or_default BOOTSTRAP_PW "Bootstrap password (min 12 chars) [admin1234567]: " "admin1234567"
 if [[ ${#BOOTSTRAP_PW} -lt 12 ]]; then
     err "Password must be at least 12 characters"
     exit 1
@@ -66,12 +111,11 @@ fi
 # --- Storage ---
 echo ""
 echo -e "${CYAN}Storage Configuration:${NC}"
-echo "  10Gi   - Base Rancher (minimum)"
-echo "  50Gi   - Rancher + basic monitoring"
+echo "  10Gi   - Base Rancher (minimum, single node only)"
+echo "  50Gi   - Rancher + basic monitoring (default)"
 echo "  200Gi  - Rancher + Prometheus + Grafana + Loki"
 echo "  500Gi  - Full observability stack with retention"
-read -rp "PVC size [10Gi]: " PVC_SIZE
-PVC_SIZE="${PVC_SIZE:-10Gi}"
+prompt_or_default PVC_SIZE "PVC size [50Gi]: " "50Gi"
 # Strip trailing + (from help text copy-paste) and validate
 PVC_SIZE="${PVC_SIZE%+}"
 if ! [[ "$PVC_SIZE" =~ ^[0-9]+(Gi|Ti|Mi)$ ]]; then
@@ -79,30 +123,30 @@ if ! [[ "$PVC_SIZE" =~ ^[0-9]+(Gi|Ti|Mi)$ ]]; then
     exit 1
 fi
 
-read -rp "Storage class [harvester-longhorn]: " STORAGE_CLASS
-STORAGE_CLASS="${STORAGE_CLASS:-harvester-longhorn}"
+prompt_or_default STORAGE_CLASS "Storage class [harvester-longhorn]: " "harvester-longhorn"
+
+# --- HA configuration ---
+echo ""
+echo -e "${CYAN}HA Configuration:${NC}"
+echo "  1  - Single server (default, minimal resources)"
+echo "  3  - HA cluster (3 server nodes, recommended for production)"
+prompt_or_default SERVER_COUNT "k3k server nodes [1]: " "1"
+if [[ "$SERVER_COUNT" != "1" && "$SERVER_COUNT" != "3" ]]; then
+    err "Server count must be 1 or 3"
+    exit 1
+fi
+RANCHER_REPLICAS="$SERVER_COUNT"
 
 # --- Helm chart sources (optional) ---
 echo ""
 echo -e "${CYAN}Helm Chart Sources (press Enter for public defaults):${NC}"
 echo "  Enter HTTP repo URLs or OCI URIs (oci://harbor.example.com/project/chart)"
-read -rp "cert-manager source [https://charts.jetstack.io]: " CERTMANAGER_REPO
-CERTMANAGER_REPO="${CERTMANAGER_REPO:-https://charts.jetstack.io}"
-
-read -rp "cert-manager version [v1.18.5]: " CERTMANAGER_VERSION
-CERTMANAGER_VERSION="${CERTMANAGER_VERSION:-v1.18.5}"
-
-read -rp "Rancher source [https://releases.rancher.com/server-charts/latest]: " RANCHER_REPO
-RANCHER_REPO="${RANCHER_REPO:-https://releases.rancher.com/server-charts/latest}"
-
-read -rp "Rancher version [v2.13.2]: " RANCHER_VERSION
-RANCHER_VERSION="${RANCHER_VERSION:-v2.13.2}"
-
-read -rp "k3k source [https://rancher.github.io/k3k]: " K3K_REPO
-K3K_REPO="${K3K_REPO:-https://rancher.github.io/k3k}"
-
-read -rp "k3k version [1.0.2-rc2]: " K3K_VERSION
-K3K_VERSION="${K3K_VERSION:-1.0.2-rc2}"
+prompt_or_default CERTMANAGER_REPO "cert-manager source [https://charts.jetstack.io]: " "https://charts.jetstack.io"
+prompt_or_default CERTMANAGER_VERSION "cert-manager version [v1.18.5]: " "v1.18.5"
+prompt_or_default RANCHER_REPO "Rancher source [https://releases.rancher.com/server-charts/latest]: " "https://releases.rancher.com/server-charts/latest"
+prompt_or_default RANCHER_VERSION "Rancher version [v2.13.2]: " "v2.13.2"
+prompt_or_default K3K_REPO "k3k source [https://rancher.github.io/k3k]: " "https://rancher.github.io/k3k"
+prompt_or_default K3K_VERSION "k3k version [1.0.2-rc2]: " "1.0.2-rc2"
 
 # --- Private registry (optional) ---
 echo ""
@@ -111,32 +155,47 @@ echo "  Enter the registry host (e.g. harbor.example.com)."
 echo "  Containerd mirrors are generated for: docker.io, quay.io, ghcr.io"
 echo "  Each requires a matching proxy cache project in Harbor."
 echo "  Requires k3k >= v1.0.2-rc2 (secretMounts support)."
-read -rp "Private registry host []: " PRIVATE_REGISTRY
-PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-}"
+if [[ -z "${PRIVATE_REGISTRY+x}" ]]; then
+    if [[ -n "$CONFIG_FILE" ]]; then
+        PRIVATE_REGISTRY=""
+    else
+        read -rp "Private registry host []: " PRIVATE_REGISTRY
+        PRIVATE_REGISTRY="${PRIVATE_REGISTRY:-}"
+    fi
+fi
 
 # --- Private CA certificate (optional) ---
 echo ""
 echo -e "${CYAN}Private CA Certificate (press Enter to skip):${NC}"
 echo "  Path to a PEM-encoded CA bundle for internal TLS."
 echo "  Used when Helm repos or registries use private certificates."
-read -rp "CA certificate path []: " PRIVATE_CA_PATH
-PRIVATE_CA_PATH="${PRIVATE_CA_PATH:-}"
+if [[ -z "${PRIVATE_CA_PATH+x}" ]]; then
+    if [[ -n "$CONFIG_FILE" ]]; then
+        PRIVATE_CA_PATH=""
+    else
+        read -rp "CA certificate path []: " PRIVATE_CA_PATH
+        PRIVATE_CA_PATH="${PRIVATE_CA_PATH:-}"
+    fi
+fi
 
 # --- Helm repo authentication (optional) ---
 echo ""
-HELM_REPO_USER=""
-HELM_REPO_PASS=""
-read -rp "Do your Helm repos require authentication? (yes/no) [no]: " HELM_AUTH_NEEDED
-HELM_AUTH_NEEDED="${HELM_AUTH_NEEDED:-no}"
+HELM_REPO_USER="${HELM_REPO_USER:-}"
+HELM_REPO_PASS="${HELM_REPO_PASS:-}"
+prompt_or_default HELM_AUTH_NEEDED "Do your Helm repos require authentication? (yes/no) [no]: " "no"
 if [[ "$HELM_AUTH_NEEDED" == "yes" ]]; then
     echo -e "${CYAN}Helm Repository Authentication:${NC}"
-    read -rp "Helm repo username: " HELM_REPO_USER
+    if [[ -z "$HELM_REPO_USER" ]]; then
+        read -rp "Helm repo username: " HELM_REPO_USER
+    fi
     if [[ -z "$HELM_REPO_USER" ]]; then
         err "Username is required when authentication is enabled"
         exit 1
     fi
-    read -rsp "Helm repo password: " HELM_REPO_PASS
-    echo ""
+    if [[ -z "$HELM_REPO_PASS" ]]; then
+        read -rsp "Helm repo password: " HELM_REPO_PASS
+        echo ""
+    fi
     if [[ -z "$HELM_REPO_PASS" ]]; then
         err "Password is required when username is set"
         exit 1
@@ -149,8 +208,7 @@ echo -e "${CYAN}TLS Certificate Source:${NC}"
 echo "  rancher      - Self-signed (default, no external dependency)"
 echo "  letsEncrypt  - Let's Encrypt (requires public DNS)"
 echo "  secret       - Provide your own TLS cert"
-read -rp "TLS source [rancher]: " TLS_SOURCE
-TLS_SOURCE="${TLS_SOURCE:-rancher}"
+prompt_or_default TLS_SOURCE "TLS source [rancher]: " "rancher"
 
 # Validate CA cert path if provided
 if [[ -n "$PRIVATE_CA_PATH" && ! -f "$PRIVATE_CA_PATH" ]]; then
@@ -165,6 +223,11 @@ echo "  Hostname:         $HOSTNAME"
 echo "  Password:         ****"
 echo "  PVC Size:         $PVC_SIZE"
 echo "  Storage Class:    $STORAGE_CLASS"
+if [[ "$SERVER_COUNT" -ge 3 ]]; then
+    echo "  Server Nodes:     $SERVER_COUNT (HA)"
+else
+    echo "  Server Nodes:     $SERVER_COUNT"
+fi
 echo "  cert-manager:     $CERTMANAGER_REPO ($CERTMANAGER_VERSION)$(is_oci "$CERTMANAGER_REPO" && echo ' [OCI]')"
 echo "  Rancher:          $RANCHER_REPO ($RANCHER_VERSION)$(is_oci "$RANCHER_REPO" && echo ' [OCI]')"
 echo "  k3k:              $K3K_REPO ($K3K_VERSION)$(is_oci "$K3K_REPO" && echo ' [OCI]')"
@@ -173,8 +236,7 @@ echo "  TLS Source:       $TLS_SOURCE"
 [[ -n "$PRIVATE_CA_PATH" ]] && echo "  CA Cert:          $PRIVATE_CA_PATH"
 [[ -n "$HELM_REPO_USER" ]] && echo "  Helm Auth:        $HELM_REPO_USER / ****" || echo "  Helm Auth:        none (public repos)"
 echo ""
-read -rp "Proceed? (yes/no) [yes]: " CONFIRM
-CONFIRM="${CONFIRM:-yes}"
+prompt_or_default CONFIRM "Proceed? (yes/no) [yes]: " "yes"
 if [[ "$CONFIRM" != "yes" ]]; then
     log "Aborted."
     exit 0
@@ -324,6 +386,7 @@ else
     CLUSTER_MANIFEST=$(mktemp)
     sed -e "s|__PVC_SIZE__|${PVC_SIZE}|g" \
         -e "s|__STORAGE_CLASS__|${STORAGE_CLASS}|g" \
+        -e "s|__SERVER_COUNT__|${SERVER_COUNT}|g" \
         "$SCRIPT_DIR/rancher-cluster.yaml" > "$CLUSTER_MANIFEST"
     inject_secret_mounts "$CLUSTER_MANIFEST"
     kubectl apply -f "$CLUSTER_MANIFEST"
@@ -331,15 +394,21 @@ else
 fi
 
 log "Waiting for k3k cluster to be ready..."
+# HA clusters (3 nodes) need more time for etcd cluster formation
+if [[ "$SERVER_COUNT" -ge 3 ]]; then
+    MAX_CLUSTER_ATTEMPTS=120
+else
+    MAX_CLUSTER_ATTEMPTS=60
+fi
 ATTEMPTS=0
 while true; do
     STATUS=$(kubectl get clusters.k3k.io "$K3K_CLUSTER" -n "$K3K_NS" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
     if [[ "$STATUS" == "Ready" ]]; then
         break
     fi
-    if [[ $ATTEMPTS -ge 60 ]]; then
+    if [[ $ATTEMPTS -ge $MAX_CLUSTER_ATTEMPTS ]]; then
         echo ""
-        err "Timed out waiting for k3k cluster (5 minutes). Current status: $STATUS"
+        err "Timed out waiting for k3k cluster. Current status: $STATUS"
         err "Check: kubectl get clusters.k3k.io $K3K_CLUSTER -n $K3K_NS -o yaml"
         err "Check: kubectl get pods -n $K3K_NS"
         exit 1
@@ -444,6 +513,26 @@ else
     sedi "/__CERTMANAGER_REPO_LINE__/d" "$CERTMANAGER_MANIFEST"
 fi
 
+# Inject cert-manager HA values (replicaCount for all components)
+if [[ "$SERVER_COUNT" -ge 3 ]]; then
+    EXTRA_CM_VALUES_FILE=$(mktemp)
+    printf '    replicaCount: 3\n' > "$EXTRA_CM_VALUES_FILE"
+    printf '    webhook.replicaCount: 3\n' >> "$EXTRA_CM_VALUES_FILE"
+    printf '    cainjector.replicaCount: 3\n' >> "$EXTRA_CM_VALUES_FILE"
+    TMPFILE=$(mktemp)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "__EXTRA_CERTMANAGER_VALUES__" ]]; then
+            cat "$EXTRA_CM_VALUES_FILE"
+        else
+            printf '%s\n' "$line"
+        fi
+    done < "$CERTMANAGER_MANIFEST" > "$TMPFILE"
+    mv "$TMPFILE" "$CERTMANAGER_MANIFEST"
+    rm -f "$EXTRA_CM_VALUES_FILE"
+else
+    sedi "/__EXTRA_CERTMANAGER_VALUES__/d" "$CERTMANAGER_MANIFEST"
+fi
+
 inject_helmchart_auth "$CERTMANAGER_MANIFEST" "$CERTMANAGER_REPO"
 $K3K_CMD apply -f "$CERTMANAGER_MANIFEST"
 rm -f "$CERTMANAGER_MANIFEST"
@@ -473,6 +562,7 @@ sed -e "s|__HOSTNAME__|${HOSTNAME}|g" \
     -e "s|__RANCHER_CHART__|${RANCHER_CHART}|g" \
     -e "s|__RANCHER_VERSION__|${RANCHER_VERSION}|g" \
     -e "s|__TLS_SOURCE__|${TLS_SOURCE}|g" \
+    -e "s|__RANCHER_REPLICAS__|${RANCHER_REPLICAS}|g" \
     "$SCRIPT_DIR/post-install/02-rancher.yaml" > "$RANCHER_MANIFEST"
 
 # Inject or remove the repo line (OCI has no spec.repo)

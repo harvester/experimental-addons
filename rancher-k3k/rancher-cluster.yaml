@@ -19,8 +19,8 @@ spec:
   # Virtual mode: complete isolation with dedicated K3s server pods
   mode: virtual
 
-  # Single server node
-  servers: 1
+  # Server node count (1=standalone, 3=HA)
+  servers: __SERVER_COUNT__
   agents: 0
 
   # Use distinct CIDRs to avoid conflict with host cluster

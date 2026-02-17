@@ -137,35 +137,33 @@ spec:
 
                   echo "=== Flannel crash recovery ==="
 
-                  # Check if k3k server pod is in CrashLoopBackOff
-                  POD_STATUS=$(kubectl get pod k3k-rancher-server-0 -n rancher-k3k -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+                  # Check all server pods for CrashLoopBackOff
+                  for POD in $(kubectl get pods -l "cluster=rancher,role=server" -n rancher-k3k -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+                    POD_STATUS=$(kubectl get pod "$POD" -n rancher-k3k -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
 
-                  if [ "$POD_STATUS" = "CrashLoopBackOff" ]; then
-                    echo "Pod in CrashLoopBackOff, checking logs..."
+                    if [ "$POD_STATUS" = "CrashLoopBackOff" ]; then
+                      echo "$POD in CrashLoopBackOff, checking logs..."
 
-                    # Check if it's the flannel network policy controller error
-                    LOGS=$(kubectl logs k3k-rancher-server-0 -n rancher-k3k --previous --tail=5 2>/dev/null || echo "")
+                      LOGS=$(kubectl logs "$POD" -n rancher-k3k --previous --tail=5 2>/dev/null || echo "")
 
-                    if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
-                      echo "Flannel network policy crash detected!"
+                      if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
+                        echo "Flannel network policy crash detected on $POD!"
 
-                      # Ensure --disable-network-policy is in serverArgs
-                      CURRENT_ARGS=$(kubectl get clusters.k3k.io rancher -n rancher-k3k -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
-                      if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
-                        echo "Patching Cluster CR with --disable-network-policy..."
-                        kubectl patch clusters.k3k.io rancher -n rancher-k3k --type=merge \
-                          -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
+                        CURRENT_ARGS=$(kubectl get clusters.k3k.io rancher -n rancher-k3k -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
+                        if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
+                          echo "Patching Cluster CR with --disable-network-policy..."
+                          kubectl patch clusters.k3k.io rancher -n rancher-k3k --type=merge \
+                            -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
+                        fi
+
+                        echo "Deleting $POD to reset backoff and apply new args..."
+                        kubectl delete pod "$POD" -n rancher-k3k --grace-period=0 2>/dev/null || true
+                      else
+                        echo "CrashLoopBackOff on $POD is not flannel-related, skipping"
                       fi
-
-                      # Delete the pod to reset backoff timer and pick up new args
-                      echo "Deleting pod to reset backoff and apply new args..."
-                      kubectl delete pod k3k-rancher-server-0 -n rancher-k3k --grace-period=0 2>/dev/null || true
-
                     else
-                      echo "CrashLoopBackOff is not flannel-related, skipping"
+                      echo "$POD is healthy (status: ${POD_STATUS:-Running})"
                     fi
-                  else
-                    echo "Pod is healthy (status: ${POD_STATUS:-Running})"
-                  fi
+                  done
 
                   echo "=== Reconciliation complete ==="

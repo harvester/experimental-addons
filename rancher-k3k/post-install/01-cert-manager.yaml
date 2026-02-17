@@ -26,3 +26,4 @@ __REPO_CA_LINE1__
 __REPO_CA_LINE2__
   set:
     crds.enabled: "true"
+__EXTRA_CERTMANAGER_VALUES__

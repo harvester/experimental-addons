@@ -3,9 +3,21 @@ set -euo pipefail
 
 # Destroy Rancher k3k deployment on Harvester
 # This removes all k3k resources from the cluster and monitors teardown progress.
+#
+# Usage: ./destroy.sh [-y]
 
 K3K_NS="rancher-k3k"
 K3K_CLUSTER="rancher"
+
+# --- Flags ---
+AUTO_CONFIRM=false
+while getopts "y" opt; do
+    case $opt in
+        y) AUTO_CONFIRM=true ;;
+        *) echo "Usage: $0 [-y]"; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 # Colors
 RED='\033[0;31m'
@@ -58,7 +70,11 @@ else
 fi
 echo ""
 
-read -rp "Are you sure? (yes/no): " CONFIRM
+if $AUTO_CONFIRM; then
+    CONFIRM="yes"
+else
+    read -rp "Are you sure? (yes/no): " CONFIRM
+fi
 
 if [[ "$CONFIRM" != "yes" ]]; then
     log "Aborted."
