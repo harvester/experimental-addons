@@ -2,6 +2,7 @@
 ignore: |
   test/
   post-install/
+  templates/
   rancher-cluster.yaml
 
 rules:

@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# =============================================================================
+# DEPRECATED: Use rancher-backup.sh instead.
+#
+# This script performs a metadata-only backup (kubectl + API export).
+# rancher-backup.sh uses the rancher-backup operator for full etcd-level
+# backup of Rancher state (users, RBAC, fleet, clusters, settings, etc.)
+# and works with any Rancher cluster, not just k3k.
+#
+# This script is retained for backward compatibility and PVC resize workflows
+# where a metadata rebuild (not state restore) is acceptable.
+# =============================================================================
+
 # Backup Rancher k3k vcluster state
 #
 # Creates a timestamped backup directory containing:

@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# =============================================================================
+# DEPRECATED: Use rancher-restore.sh instead.
+#
+# This script performs a metadata-only rebuild (redeploy from config).
+# rancher-restore.sh uses the rancher-backup operator to restore full
+# Rancher state (users, RBAC, fleet, clusters, settings, tokens, etc.)
+# and works with any Rancher cluster, not just k3k.
+#
+# This script is retained for backward compatibility and PVC resize workflows
+# where a metadata rebuild (not state restore) is acceptable.
+# =============================================================================
+
 # Restore Rancher k3k vcluster from backup
 #
 # Rebuilds the entire k3k Rancher stack from a backup created by backup.sh:

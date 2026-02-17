@@ -199,20 +199,45 @@ Run the included test script to validate template processing:
 
 ## Backup and Restore
 
-Back up the vcluster state before destructive operations (PVC resize, storage class migration, disaster recovery):
+### Universal (recommended)
+
+Full etcd-level backup/restore using the
+[rancher-backup operator](https://ranchermanager.docs.rancher.com/how-to-guides/new-user-guides/backup-restore-and-disaster-recovery).
+Preserves users, RBAC, fleet state, cluster registrations, settings, and tokens.
+Works with any Rancher cluster (k3k, RKE2, K3s, Docker).
+
+```bash
+# Backup to S3
+./rancher-backup.sh --s3-bucket my-bucket --s3-endpoint minio:9000 \
+    --s3-access-key KEY --s3-secret-key SECRET
+
+# Restore into existing Rancher
+./rancher-restore.sh --backup-file rancher-backup-20260217.tar.gz \
+    --s3-bucket my-bucket --s3-endpoint minio:9000 \
+    --s3-access-key KEY --s3-secret-key SECRET
+
+# Full deploy + restore (k3k)
+./rancher-restore.sh --deploy-rancher --backup-file rancher-backup-20260217.tar.gz \
+    --hostname rancher.example.com --bootstrap-pw admin1234567 \
+    --s3-bucket my-bucket --s3-endpoint minio:9000 \
+    --s3-access-key KEY --s3-secret-key SECRET
+```
+
+See [docs/universal-backup-restore.md](docs/universal-backup-restore.md) for the full guide.
+
+### Legacy (k3k metadata rebuild)
+
+The legacy scripts perform metadata-only backup (kubectl + API export) and
+rebuild from config. They do **not** preserve Rancher internal state. Retained
+for PVC resize workflows where a full rebuild is acceptable.
 
 ```bash
 ./backup.sh
-```
-
-Restore from a backup (optionally with a different PVC size):
-
-```bash
 ./restore.sh --from ./backups/<timestamp>
 ./restore.sh --from ./backups/<timestamp> --pvc-size 20Gi
 ```
 
-See [docs/backup-restore.md](docs/backup-restore.md) for the full guide.
+See [docs/backup-restore.md](docs/backup-restore.md) for the legacy guide.
 
 ## Terraform Setup
 
@@ -265,8 +290,11 @@ resource "rancher2_cloud_credential" "harvester" {
 rancher-k3k/
 ├── deploy.sh                # Automated deployment script
 ├── destroy.sh               # Teardown with verification
-├── backup.sh                # State backup (config + API)
-├── restore.sh               # Rebuild from backup
+├── rancher-backup.sh        # Universal backup (rancher-backup operator)
+├── rancher-restore.sh       # Universal restore (data-only or full deploy)
+├── backup-lib.sh            # Shared functions for universal backup/restore
+├── backup.sh                # Legacy: k3k metadata backup (deprecated)
+├── restore.sh               # Legacy: k3k metadata rebuild (deprecated)
 ├── lib.sh                   # Shared functions (OCI, auth, registry config)
 ├── terraform-setup.sh       # Post-deploy: API tokens + kubeconfigs
 ├── restore-ingress.sh       # Standalone ingress restoration
@@ -280,7 +308,13 @@ rancher-k3k/
 ├── post-install/            # HelmChart CR templates (k3k virtual cluster)
 │   ├── 01-cert-manager.yaml
 │   └── 02-rancher.yaml
+├── templates/               # CR templates for rancher-backup operator
+│   ├── backup-cr.yaml
+│   ├── restore-cr.yaml
+│   ├── s3-credentials.yaml
+│   └── encryption-config.yaml
 ├── docs/                    # Operational documentation
+│   ├── universal-backup-restore.md
 │   ├── backup-restore.md
 │   ├── certificate-change-recovery.md
 │   └── multi-cluster-observability.md

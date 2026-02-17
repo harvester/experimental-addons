@@ -1,5 +1,11 @@
 # Rancher k3k Backup and Restore
 
+> **New**: For full etcd-level backup/restore that preserves users, RBAC, fleet,
+> and works with any Rancher cluster (not just k3k), see
+> [Universal Backup and Restore](universal-backup-restore.md).
+> The scripts below (`backup.sh`/`restore.sh`) perform metadata-only
+> rebuild and are retained for PVC resize workflows.
+
 Guide for backing up and restoring a Rancher management server running inside a k3k virtual cluster on Harvester.
 
 ## Why Backup/Restore?
