@@ -1,0 +1,38 @@
+# Kubeconfig (never commit)
+kubeconfig*
+*.kubeconfig
+merged.*
+
+# Terraform (never commit)
+*.tfvars
+*.tfstate
+*.tfstate.backup
+*.tfplan
+.terraform/
+.terraform.lock.hcl
+
+# Certificates and keys (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Backups (local state)
+backups/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Sync script (private tooling)
+scripts/

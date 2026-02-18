@@ -1,0 +1,11 @@
+---
+ignore: |
+  harvester-csi-driver-lvm/
+  harvester-vm-dhcp-controller/
+
+rules:
+  document-start: disable
+  line-length:
+    max: 200
+  truthy:
+    check-keys: false

@@ -1,0 +1,9 @@
+apiVersion: resources.cattle.io/v1
+kind: Restore
+metadata:
+  name: __RESTORE_NAME__
+spec:
+  backupFilename: __BACKUP_FILE__
+__STORAGE_LOCATION__
+__ENCRYPTION_CONFIG__
+__PRUNE__

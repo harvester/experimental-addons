@@ -1,0 +1,202 @@
+---
+# Deployment that watches all k3k server pods and triggers reconciliation
+# within seconds of a pod restart, instead of waiting for the CronJob's
+# 5-minute cycle. Supports both single-node and HA (3-node) clusters.
+#
+# Handles two scenarios:
+#   1. Any pod becomes Ready after reschedule — waits for k3k controller to
+#      finish reconciling (which deletes the host Ingress), then recreates it.
+#   2. Any pod enters CrashLoopBackOff with flannel error — patches the Cluster
+#      CR with --disable-network-policy and resets that specific pod.
+#
+# The CronJob (ingress-reconciler) is kept as a safety net.
+#
+# Usage:
+#   sed 's|__HOSTNAME__|rancher.example.com|g' ingress-watcher.yaml | kubectl apply -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingress-watcher
+  namespace: rancher-k3k
+  labels:
+    app: ingress-watcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingress-watcher
+  template:
+    metadata:
+      labels:
+        app: ingress-watcher
+    spec:
+      serviceAccountName: ingress-reconciler
+      containers:
+        - name: watcher
+          image: alpine/kubectl:1.34.2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          command:
+            - sh
+            - -c
+            - |
+              NS="rancher-k3k"
+              CLUSTER="rancher"
+              HOSTNAME="__HOSTNAME__"
+              POLL_INTERVAL=10
+              STATE_DIR="/tmp/watcher-state"
+
+              mkdir -p "$STATE_DIR"
+              log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+
+              # Per-pod state helpers (file-based to support dynamic pod count)
+              get_state() { cat "$STATE_DIR/$1.$2" 2>/dev/null || echo ""; }
+              set_state() { printf '%s' "$3" > "$STATE_DIR/$1.$2"; }
+
+              reconcile_ingress() {
+                  log "=== Ingress reconciliation ==="
+
+                  kubectl get svc rancher-k3k-traefik -n "$NS" &>/dev/null || {
+                      log "Service missing, recreating..."
+                      kubectl apply -f - <<'SVC'
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: rancher-k3k-traefik
+                namespace: rancher-k3k
+              spec:
+                type: ClusterIP
+                selector:
+                  cluster: rancher
+                  role: server
+                ports:
+                  - name: http
+                    port: 80
+                    targetPort: 80
+                  - name: https
+                    port: 443
+                    targetPort: 443
+              SVC
+                  }
+
+                  kubectl get ingress rancher-k3k-ingress -n "$NS" &>/dev/null || {
+                      log "Ingress missing, recreating..."
+                      cat <<EOF | kubectl apply -f -
+              apiVersion: networking.k8s.io/v1
+              kind: Ingress
+              metadata:
+                name: rancher-k3k-ingress
+                namespace: rancher-k3k
+                annotations:
+                  nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+              spec:
+                ingressClassName: nginx
+                tls:
+                  - hosts:
+                      - ${HOSTNAME}
+                    secretName: tls-rancher-ingress
+                rules:
+                  - host: ${HOSTNAME}
+                    http:
+                      paths:
+                        - path: /
+                          pathType: Prefix
+                          backend:
+                            service:
+                              name: rancher-k3k-traefik
+                              port:
+                                number: 443
+              EOF
+                  }
+
+                  log "=== Ingress reconciliation complete ==="
+              }
+
+              recover_flannel() {
+                  local pod_name="$1"
+                  log "=== Flannel crash recovery for $pod_name ==="
+
+                  LOGS=$(kubectl logs "$pod_name" -n "$NS" --previous --tail=5 2>/dev/null || echo "")
+
+                  if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
+                      log "Flannel network policy crash confirmed on $pod_name"
+
+                      CURRENT_ARGS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                          -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
+
+                      if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
+                          log "Patching Cluster CR with --disable-network-policy..."
+                          kubectl patch clusters.k3k.io "$CLUSTER" -n "$NS" --type=merge \
+                              -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
+                      fi
+
+                      log "Deleting pod $pod_name to reset backoff timer..."
+                      kubectl delete pod "$pod_name" -n "$NS" --grace-period=0 2>/dev/null || true
+                  else
+                      log "CrashLoopBackOff on $pod_name is not flannel-related, skipping"
+                  fi
+
+                  log "=== Flannel crash recovery complete ==="
+              }
+
+              # --- Main watch loop ---
+              log "Starting k3k pod watcher (poll every ${POLL_INTERVAL}s)"
+
+              while true; do
+                  # Discover all server pods via label selector
+                  PODS=$(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
+                  for POD in $PODS; do
+                      INFO=$(kubectl get pod "$POD" -n "$NS" \
+                          -o jsonpath='{.metadata.uid}|{.status.containerStatuses[0].ready}|{.status.containerStatuses[0].state.waiting.reason}' \
+                          2>/dev/null || echo "||")
+
+                      POD_UID=$(echo "$INFO" | cut -d'|' -f1)
+                      READY=$(echo "$INFO" | cut -d'|' -f2)
+                      WAITING=$(echo "$INFO" | cut -d'|' -f3)
+
+                      # --- Scenario 1: Pod became Ready after restart ---
+                      RECONCILED_UID=$(get_state "$POD" "reconciled_uid")
+                      if [ "$READY" = "true" ] && [ -n "$POD_UID" ] && [ "$POD_UID" != "$RECONCILED_UID" ]; then
+                          log "Pod $POD Ready (UID: $POD_UID) — waiting for k3k controller to finish..."
+
+                          ATTEMPTS=0
+                          while [ $ATTEMPTS -lt 30 ]; do
+                              STATUS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                              if [ "$STATUS" = "Ready" ]; then
+                                  break
+                              fi
+                              ATTEMPTS=$((ATTEMPTS + 1))
+                              sleep 5
+                          done
+
+                          log "Cluster Ready, waiting 15s for cleanup to settle..."
+                          sleep 15
+
+                          reconcile_ingress
+                          set_state "$POD" "reconciled_uid" "$POD_UID"
+                      fi
+
+                      # --- Scenario 2: Flannel CrashLoopBackOff ---
+                      LAST_WAITING=$(get_state "$POD" "last_waiting")
+                      FLANNEL_UID=$(get_state "$POD" "flannel_uid")
+                      if [ "$WAITING" = "CrashLoopBackOff" ] && [ "$LAST_WAITING" != "CrashLoopBackOff" ] \
+                         && [ "$POD_UID" != "$FLANNEL_UID" ]; then
+                          log "CrashLoopBackOff detected on $POD (UID: $POD_UID)"
+                          recover_flannel "$POD"
+                          set_state "$POD" "flannel_uid" "$POD_UID"
+                      fi
+
+                      set_state "$POD" "last_waiting" "$WAITING"
+                  done
+
+                  sleep "$POLL_INTERVAL"
+              done

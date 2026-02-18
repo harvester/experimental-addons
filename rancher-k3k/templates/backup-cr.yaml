@@ -1,0 +1,10 @@
+apiVersion: resources.cattle.io/v1
+kind: Backup
+metadata:
+  name: __BACKUP_NAME__
+spec:
+  resourceSetName: __RESOURCE_SET__
+__STORAGE_LOCATION__
+__ENCRYPTION_CONFIG__
+__SCHEDULE__
+__RETENTION__
