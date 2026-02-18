@@ -294,7 +294,12 @@ if [[ -n "$PRIVATE_REGISTRY" ]]; then
     EXTRA_RANCHER_VALUES="${EXTRA_RANCHER_VALUES}    systemDefaultRegistry: \"${PRIVATE_REGISTRY}/docker.io\"\n"
 fi
 
-if [[ -n "$PRIVATE_CA_PATH" ]]; then
+if [[ -n "$PRIVATE_CA_PATH" && "$TLS_SOURCE" != "rancher" ]]; then
+    # privateCA tells Rancher to read the tls-ca secret for its cacerts setting.
+    # Only needed when TLS_SOURCE=secret (user-provided cert from a private CA).
+    # With TLS_SOURCE=rancher, Rancher manages its own self-signed CA automatically;
+    # setting privateCA=true would override that with the Harbor root CA, breaking
+    # the trust chain for downstream cluster agents.
     EXTRA_RANCHER_VALUES="${EXTRA_RANCHER_VALUES}    privateCA: \"true\"\n"
 fi
 
@@ -329,9 +334,9 @@ else
     helm repo update k3k
     if helm status k3k -n k3k-system &>/dev/null; then
         log "k3k already installed, upgrading to $K3K_VERSION..."
-        helm upgrade k3k k3k/k3k -n k3k-system --version "$K3K_VERSION" ${HELM_CA_FLAGS[@]+"${HELM_CA_FLAGS[@]}"}
+        helm upgrade k3k k3k/k3k -n k3k-system --version "$K3K_VERSION"
     else
-        helm install k3k k3k/k3k -n k3k-system --create-namespace --version "$K3K_VERSION" ${HELM_CA_FLAGS[@]+"${HELM_CA_FLAGS[@]}"}
+        helm install k3k k3k/k3k -n k3k-system --create-namespace --version "$K3K_VERSION"
     fi
 fi
 log "Waiting for k3k controller..."
@@ -452,7 +457,10 @@ log "Connected to k3k virtual cluster"
 # =============================================================================
 # Step 3.5 (optional): Install private CA into k3k cluster
 # =============================================================================
-if [[ -n "$PRIVATE_CA_PATH" ]]; then
+if [[ -n "$PRIVATE_CA_PATH" && "$TLS_SOURCE" != "rancher" ]]; then
+    # Create tls-ca secret only when Rancher needs a user-provided CA (TLS_SOURCE=secret).
+    # With TLS_SOURCE=rancher, Rancher auto-generates its own CA; injecting only the
+    # Harbor root CA here would replace Rancher's CA in the cacerts setting.
     log "Installing private CA certificate into k3k cluster..."
     $K3K_CMD create namespace cattle-system --dry-run=client -o yaml | $K3K_CMD apply -f -
     $K3K_CMD -n cattle-system create secret generic tls-ca \

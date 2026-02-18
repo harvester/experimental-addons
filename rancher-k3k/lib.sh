@@ -78,12 +78,17 @@ build_helm_repo_flags() {
     if [[ -n "${HELM_REPO_USER:-}" && -n "${HELM_REPO_PASS:-}" ]]; then
         HELM_REPO_FLAGS+=(--username "$HELM_REPO_USER" --password "$HELM_REPO_PASS")
     fi
-    if [[ -n "${PRIVATE_CA_PATH:-}" ]]; then
-        HELM_REPO_FLAGS+=(--ca-file "$PRIVATE_CA_PATH")
-    fi
+    # Note: --ca-file is NOT added here. PRIVATE_CA_PATH is for the private
+    # registry/Harbor, not for public Helm repos. Passing --ca-file to
+    # 'helm repo add' replaces system CAs, breaking public repos like
+    # charts.jetstack.io and rancher.github.io. Private CA for OCI registries
+    # is handled by helm_registry_login. Private CA inside the vCluster is
+    # handled by repoCAConfigMap in HelmChart CRs.
 }
 
-# Build Helm CA flags only (for install/upgrade commands that don't take --username/--password).
+# Build Helm CA flags for OCI install/upgrade commands.
+# Only used for OCI chart sources where the registry uses a private CA.
+# NOT used for public HTTP repos (system CAs handle TLS verification).
 # Sets HELM_CA_FLAGS array.
 # Reads: PRIVATE_CA_PATH
 build_helm_ca_flags() {
@@ -95,14 +100,20 @@ build_helm_ca_flags() {
 
 # Replace auth/CA placeholders in a HelmChart CR manifest file.
 # If HELM_REPO_USER is set, injects auth lines; otherwise removes placeholders.
-# If PRIVATE_CA_PATH is set, injects repoCAConfigMap lines; otherwise removes placeholders.
+# If PRIVATE_CA_PATH is set AND the chart source is on the private registry,
+# injects repoCAConfigMap lines; otherwise removes placeholders.
 #
 # Auth type depends on the chart source:
 #   HTTP repos  → spec.authSecret (kubernetes.io/basic-auth)
 #   OCI registries → spec.dockerRegistrySecret (kubernetes.io/dockerconfigjson)
 #
+# repoCAConfigMap is only injected when the chart source uses the private CA:
+#   OCI charts (always hosted on private registry) or HTTP repos matching
+#   PRIVATE_REGISTRY host. Public repos (charts.jetstack.io, etc.) must NOT
+#   get repoCAConfigMap as it replaces system CAs and breaks TLS verification.
+#
 # Usage: inject_helmchart_auth <manifest-file> [chart-or-repo]
-# Reads: HELM_REPO_USER, PRIVATE_CA_PATH
+# Reads: HELM_REPO_USER, PRIVATE_CA_PATH, PRIVATE_REGISTRY
 inject_helmchart_auth() {
     local file="$1"
     local chart_ref="${2:-}"
@@ -122,7 +133,19 @@ inject_helmchart_auth() {
         sedi "/__AUTH_SECRET_LINE2__/d" "$file"
     fi
 
+    # Only inject repoCAConfigMap when the chart source uses the private CA.
+    # OCI URIs always point to the private registry. HTTP repos only need it
+    # when the URL matches the private registry host.
+    local _needs_private_ca=false
     if [[ -n "${PRIVATE_CA_PATH:-}" ]]; then
+        if is_oci "$chart_ref"; then
+            _needs_private_ca=true
+        elif [[ -n "${PRIVATE_REGISTRY:-}" && "$chart_ref" == *"${PRIVATE_REGISTRY}"* ]]; then
+            _needs_private_ca=true
+        fi
+    fi
+
+    if $_needs_private_ca; then
         sedi "s|^__REPO_CA_LINE1__$|  repoCAConfigMap:|" "$file"
         sedi "s|^__REPO_CA_LINE2__$|    name: helm-repo-ca|" "$file"
     else
