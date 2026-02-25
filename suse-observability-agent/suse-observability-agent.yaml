@@ -1,3 +1,9 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: suse-observability
+---
 apiVersion: harvesterhci.io/v1beta1
 kind: Addon
 metadata:
