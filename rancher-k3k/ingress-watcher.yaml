@@ -1,0 +1,518 @@
+---
+# Deployment that watches all k3k server pods and triggers reconciliation
+# within seconds of a pod restart, instead of waiting for the CronJob's
+# 5-minute cycle. Supports both single-node and HA (3-node) clusters.
+#
+# Handles four scenarios:
+#   1. Any pod becomes Ready after reschedule — waits for k3k controller to
+#      finish reconciling (which deletes the host Ingress), then recreates it.
+#   2. Any pod enters CrashLoopBackOff with flannel error — patches the Cluster
+#      CR with --disable-network-policy and resets that specific pod.
+#   3. Etcd quorum deadlock (HA only) — all pods CrashLoopBackOff with
+#      "timed out waiting for node to change IP". Auto-recovers by temporarily
+#      scaling to 1 server (triggers k3k's built-in cluster-reset), then back
+#      to original count. State tracked via Cluster CR annotations.
+#   4. HA server pod imbalance — after node drain/uncordon, multiple server pods
+#      may land on the same node, breaking HA protection. Detects imbalance and
+#      deletes the highest-ordinal pod on the most-loaded node so the scheduler
+#      redistributes it. Protects server-0, respects cordoned nodes, and uses
+#      debounce/cooldown to prevent delete loops.
+#
+# The CronJob (ingress-reconciler) is kept as a safety net.
+#
+# Usage:
+#   sed 's|__HOSTNAME__|rancher.example.com|g' ingress-watcher.yaml | kubectl apply -f -
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingress-watcher
+  namespace: rancher-k3k
+  labels:
+    app: ingress-watcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingress-watcher
+  template:
+    metadata:
+      labels:
+        app: ingress-watcher
+    spec:
+      serviceAccountName: ingress-reconciler
+      containers:
+        - name: watcher
+          image: alpine/kubectl:1.34.2
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          command:
+            - sh
+            - -c
+            - |
+              NS="rancher-k3k"
+              CLUSTER="rancher"
+              HOSTNAME="__HOSTNAME__"
+              POLL_INTERVAL=10
+              STATE_DIR="/tmp/watcher-state"
+
+              mkdir -p "$STATE_DIR"
+              RECOVERY_TIMEOUT=600   # 10 minutes per state
+              REBALANCE_SETTLE=60    # seconds after pod Ready before rebalancing
+              REBALANCE_DEBOUNCE=300 # seconds between rebalance attempts
+              REBALANCE_COOLDOWN=1800 # seconds cooldown after failed move
+              log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+
+              # Per-pod state helpers (file-based to support dynamic pod count)
+              get_state() { cat "$STATE_DIR/$1.$2" 2>/dev/null || echo ""; }
+              set_state() { printf '%s' "$3" > "$STATE_DIR/$1.$2"; }
+
+              reconcile_ingress() {
+                  log "=== Ingress reconciliation ==="
+
+                  kubectl get svc rancher-k3k-traefik -n "$NS" &>/dev/null || {
+                      log "Service missing, recreating..."
+                      kubectl apply -f - <<'SVC'
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: rancher-k3k-traefik
+                namespace: rancher-k3k
+              spec:
+                type: ClusterIP
+                selector:
+                  cluster: rancher
+                  role: server
+                ports:
+                  - name: http
+                    port: 80
+                    targetPort: 80
+                  - name: https
+                    port: 443
+                    targetPort: 443
+              SVC
+                  }
+
+                  kubectl get ingress rancher-k3k-ingress -n "$NS" &>/dev/null || {
+                      log "Ingress missing, recreating..."
+                      cat <<EOF | kubectl apply -f -
+              apiVersion: networking.k8s.io/v1
+              kind: Ingress
+              metadata:
+                name: rancher-k3k-ingress
+                namespace: rancher-k3k
+                annotations:
+                  nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+              spec:
+                ingressClassName: nginx
+                tls:
+                  - hosts:
+                      - ${HOSTNAME}
+                    secretName: tls-rancher-ingress
+                rules:
+                  - host: ${HOSTNAME}
+                    http:
+                      paths:
+                        - path: /
+                          pathType: Prefix
+                          backend:
+                            service:
+                              name: rancher-k3k-traefik
+                              port:
+                                number: 443
+              EOF
+                  }
+
+                  log "=== Ingress reconciliation complete ==="
+              }
+
+              recover_flannel() {
+                  local pod_name="$1"
+                  log "=== Flannel crash recovery for $pod_name ==="
+
+                  LOGS=$(kubectl logs "$pod_name" -n "$NS" --previous --tail=5 2>/dev/null || echo "")
+
+                  if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
+                      log "Flannel network policy crash confirmed on $pod_name"
+
+                      CURRENT_ARGS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                          -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
+
+                      if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
+                          log "Patching Cluster CR with --disable-network-policy..."
+                          kubectl patch clusters.k3k.io "$CLUSTER" -n "$NS" --type=merge \
+                              -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
+                      fi
+
+                      log "Deleting pod $pod_name to reset backoff timer..."
+                      kubectl delete pod "$pod_name" -n "$NS" --grace-period=0 2>/dev/null || true
+                  else
+                      log "CrashLoopBackOff on $pod_name is not flannel-related, skipping"
+                  fi
+
+                  log "=== Flannel crash recovery complete ==="
+              }
+
+              # --- Etcd quorum deadlock detection ---
+              check_etcd_deadlock() {
+                  local server_count
+                  server_count=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                      -o jsonpath='{.spec.servers}' 2>/dev/null || echo "1")
+                  [ "$server_count" -le 1 ] && return 1
+
+                  local total=0 crash=0 etcd_timeout=false
+                  for P in $(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+                      total=$((total + 1))
+                      local wait_reason
+                      wait_reason=$(kubectl get pod "$P" -n "$NS" \
+                          -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' \
+                          2>/dev/null || echo "")
+                      if [ "$wait_reason" = "CrashLoopBackOff" ]; then
+                          crash=$((crash + 1))
+                          if kubectl logs "$P" -n "$NS" --previous --tail=20 2>/dev/null \
+                              | grep -q "timed out waiting for node to change IP"; then
+                              etcd_timeout=true
+                          fi
+                      fi
+                  done
+
+                  [ "$total" -gt 1 ] && [ "$crash" -eq "$total" ] && [ "$etcd_timeout" = "true" ]
+              }
+
+              # --- Etcd quorum recovery state machine ---
+              recover_etcd_quorum() {
+                  local recovery_state recovery_started
+                  recovery_state=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                      -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-recovery-state}' \
+                      2>/dev/null || echo "")
+                  recovery_started=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                      -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-recovery-started}' \
+                      2>/dev/null || echo "")
+
+                  # Check timeout for current state
+                  if [ -n "$recovery_started" ]; then
+                      local started_epoch now_epoch elapsed
+                      started_epoch=$(date -d "$recovery_started" +%s 2>/dev/null || echo "0")
+                      now_epoch=$(date +%s)
+                      elapsed=$((now_epoch - started_epoch))
+                      if [ "$elapsed" -gt "$RECOVERY_TIMEOUT" ]; then
+                          log "ERROR: Etcd recovery state '$recovery_state' timed out after ${elapsed}s"
+                          kubectl annotate clusters.k3k.io "$CLUSTER" -n "$NS" --overwrite \
+                              "k3k.example.com/etcd-recovery-state=failed"
+                          return 1
+                      fi
+                  fi
+
+                  case "$recovery_state" in
+                      "")
+                          # Initial trigger — start recovery
+                          log "ETCD DEADLOCK DETECTED — Starting quorum recovery"
+                          local original_servers now_ts
+                          original_servers=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                              -o jsonpath='{.spec.servers}' 2>/dev/null || echo "3")
+                          now_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                          kubectl annotate clusters.k3k.io "$CLUSTER" -n "$NS" --overwrite \
+                              "k3k.example.com/etcd-recovery-state=scaling-down" \
+                              "k3k.example.com/etcd-original-servers=$original_servers" \
+                              "k3k.example.com/etcd-recovery-started=$now_ts"
+                          log "Patching spec.servers to 1 (was $original_servers)"
+                          kubectl patch clusters.k3k.io "$CLUSTER" -n "$NS" --type=merge \
+                              -p '{"spec":{"servers":1}}'
+                          ;;
+                      scaling-down)
+                          local pod_count server0_ready
+                          pod_count=$(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                              --no-headers 2>/dev/null | wc -l)
+                          server0_ready=$(kubectl get pod "${CLUSTER}-server-0" -n "$NS" \
+                              -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+                          log "scaling-down: ${pod_count} pod(s), server-0 ready=${server0_ready}"
+                          if [ "$pod_count" -le 1 ] && [ "$server0_ready" = "true" ]; then
+                              log "Single server-0 pod is Running — transitioning to resetting"
+                              kubectl annotate clusters.k3k.io "$CLUSTER" -n "$NS" --overwrite \
+                                  "k3k.example.com/etcd-recovery-state=resetting" \
+                                  "k3k.example.com/etcd-recovery-started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                          fi
+                          ;;
+                      resetting)
+                          local phase
+                          phase=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                              -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                          log "resetting: cluster phase=${phase}"
+                          if [ "$phase" = "Ready" ]; then
+                              local original_servers
+                              original_servers=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                                  -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-original-servers}' \
+                                  2>/dev/null || echo "3")
+                              log "Cluster Ready after reset — scaling back to $original_servers servers"
+                              kubectl patch clusters.k3k.io "$CLUSTER" -n "$NS" --type=merge \
+                                  -p "{\"spec\":{\"servers\":${original_servers}}}"
+                              kubectl annotate clusters.k3k.io "$CLUSTER" -n "$NS" --overwrite \
+                                  "k3k.example.com/etcd-recovery-state=scaling-up" \
+                                  "k3k.example.com/etcd-recovery-started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                          fi
+                          ;;
+                      scaling-up)
+                          local original_servers ready_count=0 phase
+                          original_servers=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                              -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-original-servers}' \
+                              2>/dev/null || echo "3")
+                          for P in $(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                              -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+                              local pod_ready
+                              pod_ready=$(kubectl get pod "$P" -n "$NS" \
+                                  -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+                              [ "$pod_ready" = "true" ] && ready_count=$((ready_count + 1))
+                          done
+                          phase=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                              -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                          log "scaling-up: ${ready_count}/${original_servers} pods ready, phase=${phase}"
+                          if [ "$ready_count" -ge "$original_servers" ] && [ "$phase" = "Ready" ]; then
+                              log "SUCCESS: All $original_servers servers ready — etcd quorum recovered"
+                              kubectl annotate clusters.k3k.io "$CLUSTER" -n "$NS" \
+                                  "k3k.example.com/etcd-recovery-state-" \
+                                  "k3k.example.com/etcd-original-servers-" \
+                                  "k3k.example.com/etcd-recovery-started-"
+                              reconcile_ingress
+                          fi
+                          ;;
+                      failed)
+                          log "Etcd recovery in FAILED state — manual intervention required"
+                          ;;
+                  esac
+              }
+
+              # --- HA server pod auto-rebalancing ---
+              check_pod_balance() {
+                  local server_count
+                  server_count=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                      -o jsonpath='{.spec.servers}' 2>/dev/null || echo "1")
+                  [ "$server_count" -le 1 ] && return 0
+
+                  # Skip if etcd recovery is in progress
+                  local recovery_state
+                  recovery_state=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                      -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-recovery-state}' \
+                      2>/dev/null || echo "")
+                  if [ -n "$recovery_state" ] && [ "$recovery_state" != "failed" ]; then
+                      return 0
+                  fi
+
+                  # Build node→pod map via jsonpath (no jq dependency)
+                  local node_map_file="$STATE_DIR/cluster.node_map"
+                  : > "$node_map_file"
+                  local pod_names total_pods=0
+                  pod_names=$(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+                  [ -z "$pod_names" ] && return 0
+
+                  for P in $pod_names; do
+                      local node
+                      node=$(kubectl get pod "$P" -n "$NS" \
+                          -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
+                      [ -z "$node" ] && continue
+                      echo "${P}:${node}" >> "$node_map_file"
+                      total_pods=$((total_pods + 1))
+                  done
+
+                  [ "$total_pods" -le 1 ] && return 0
+
+                  # Find the node with the most pods
+                  local max_line max_count max_node
+                  max_line=$(awk -F: '{print $2}' "$node_map_file" | sort | uniq -c | sort -rn | head -1)
+                  max_count=$(echo "$max_line" | awk '{print $1}')
+                  max_node=$(echo "$max_line" | awk '{print $2}')
+
+                  if [ "$max_count" -le 1 ]; then
+                      # Balanced — log success if a pending rebalance just completed
+                      local pending_pod
+                      pending_pod=$(get_state "cluster" "rebalance_pending_pod")
+                      if [ -n "$pending_pod" ]; then
+                          local current_node pending_node
+                          current_node=$(kubectl get pod "$pending_pod" -n "$NS" \
+                              -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
+                          pending_node=$(get_state "cluster" "rebalance_pending_node")
+                          if [ -n "$current_node" ] && [ "$current_node" != "$pending_node" ]; then
+                              log "Rebalance SUCCESS: $pending_pod moved from $pending_node to $current_node"
+                          fi
+                          set_state "cluster" "rebalance_pending_pod" ""
+                          set_state "cluster" "rebalance_pending_node" ""
+                      fi
+                      rm -f "$STATE_DIR/cluster.rebalance_cooldown"
+                      return 0
+                  fi
+
+                  log "Pod imbalance detected: $max_count pods on node $max_node"
+
+                  # Count schedulable nodes (not cordoned)
+                  local schedulable_nodes=0
+                  for NODE_SCHED in $(kubectl get nodes \
+                      -o jsonpath='{range .items[*]}{.metadata.name}={.spec.unschedulable}{"\n"}{end}' \
+                      2>/dev/null); do
+                      local unsched
+                      unsched=$(echo "$NODE_SCHED" | cut -d= -f2)
+                      [ "$unsched" != "true" ] && schedulable_nodes=$((schedulable_nodes + 1))
+                  done
+
+                  if [ "$schedulable_nodes" -lt "$server_count" ]; then
+                      log "WARN: Only $schedulable_nodes schedulable nodes for $server_count servers — skipping rebalance"
+                      return 0
+                  fi
+
+                  # Check cooldown from failed move (30min)
+                  local cooldown_ts
+                  cooldown_ts=$(get_state "cluster" "rebalance_cooldown")
+                  if [ -n "$cooldown_ts" ]; then
+                      local cooldown_epoch now_epoch
+                      cooldown_epoch=$(date -d "$cooldown_ts" +%s 2>/dev/null || echo "0")
+                      now_epoch=$(date +%s)
+                      if [ $((now_epoch - cooldown_epoch)) -lt "$REBALANCE_COOLDOWN" ]; then
+                          return 0
+                      fi
+                      rm -f "$STATE_DIR/cluster.rebalance_cooldown"
+                  fi
+
+                  # Check debounce (5min between attempts)
+                  local now_epoch
+                  now_epoch=$(date +%s)
+                  local last_attempt
+                  last_attempt=$(get_state "cluster" "last_rebalance_attempt")
+                  if [ -n "$last_attempt" ]; then
+                      local attempt_epoch elapsed
+                      attempt_epoch=$(date -d "$last_attempt" +%s 2>/dev/null || echo "0")
+                      elapsed=$((now_epoch - attempt_epoch))
+                      if [ "$elapsed" -lt "$REBALANCE_DEBOUNCE" ]; then
+                          return 0
+                      fi
+                      # Debounce expired — check if previous move failed
+                      local pending_pod pending_node
+                      pending_pod=$(get_state "cluster" "rebalance_pending_pod")
+                      pending_node=$(get_state "cluster" "rebalance_pending_node")
+                      if [ -n "$pending_pod" ] && [ -n "$pending_node" ]; then
+                          local current_node
+                          current_node=$(kubectl get pod "$pending_pod" -n "$NS" \
+                              -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "")
+                          if [ "$current_node" = "$pending_node" ]; then
+                              log "WARN: $pending_pod still on $pending_node after rebalance — entering 30min cooldown"
+                              set_state "cluster" "rebalance_cooldown" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                              set_state "cluster" "rebalance_pending_pod" ""
+                              set_state "cluster" "rebalance_pending_node" ""
+                              return 0
+                          fi
+                      fi
+                  fi
+
+                  # Check settle time: skip if any pod became Ready < REBALANCE_SETTLE ago
+                  for P in $pod_names; do
+                      local ready_ts
+                      ready_ts=$(kubectl get pod "$P" -n "$NS" \
+                          -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}' \
+                          2>/dev/null || echo "")
+                      if [ -n "$ready_ts" ]; then
+                          local ready_epoch
+                          ready_epoch=$(date -d "$ready_ts" +%s 2>/dev/null || echo "0")
+                          if [ $((now_epoch - ready_epoch)) -lt "$REBALANCE_SETTLE" ]; then
+                              log "Pod $P became Ready ${ready_ts} (<${REBALANCE_SETTLE}s ago) — waiting to settle"
+                              return 0
+                          fi
+                      fi
+                  done
+
+                  # Pick the highest-ordinal pod on the most-loaded node (protect server-0)
+                  local target_pod
+                  target_pod=$(grep ":${max_node}$" "$node_map_file" | \
+                      awk -F: '{print $1}' | sort -t- -k3 -n -r | head -1)
+
+                  if [ -z "$target_pod" ] || [ "$target_pod" = "${CLUSTER}-server-0" ]; then
+                      log "WARN: Would need to move server-0 — skipping (protects etcd init node)"
+                      return 0
+                  fi
+
+                  log "Rebalancing: deleting $target_pod from node $max_node (scheduler will redistribute)"
+                  set_state "cluster" "last_rebalance_attempt" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  set_state "cluster" "rebalance_pending_pod" "$target_pod"
+                  set_state "cluster" "rebalance_pending_node" "$max_node"
+                  kubectl delete pod "$target_pod" -n "$NS" --grace-period=30 --wait=false 2>/dev/null || true
+                  log "Pod $target_pod deleted — StatefulSet controller will recreate it"
+              }
+
+              # --- Main watch loop ---
+              log "Starting k3k pod watcher (poll every ${POLL_INTERVAL}s)"
+
+              while true; do
+                  # --- Etcd recovery check (runs before per-pod processing) ---
+                  RECOVERY_STATE=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                      -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-recovery-state}' \
+                      2>/dev/null || echo "")
+
+                  if [ -n "$RECOVERY_STATE" ] && [ "$RECOVERY_STATE" != "failed" ]; then
+                      recover_etcd_quorum
+                      sleep "$POLL_INTERVAL"
+                      continue
+                  fi
+
+                  if check_etcd_deadlock; then
+                      recover_etcd_quorum
+                      sleep "$POLL_INTERVAL"
+                      continue
+                  fi
+
+                  # --- Pod balance check (rebalance after drain/uncordon) ---
+                  check_pod_balance
+
+                  # Discover all server pods via label selector
+                  PODS=$(kubectl get pods -l "cluster=$CLUSTER,role=server" -n "$NS" \
+                      -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+
+                  for POD in $PODS; do
+                      INFO=$(kubectl get pod "$POD" -n "$NS" \
+                          -o jsonpath='{.metadata.uid}|{.status.containerStatuses[0].ready}|{.status.containerStatuses[0].state.waiting.reason}' \
+                          2>/dev/null || echo "||")
+
+                      POD_UID=$(echo "$INFO" | cut -d'|' -f1)
+                      READY=$(echo "$INFO" | cut -d'|' -f2)
+                      WAITING=$(echo "$INFO" | cut -d'|' -f3)
+
+                      # --- Scenario 1: Pod became Ready after restart ---
+                      RECONCILED_UID=$(get_state "$POD" "reconciled_uid")
+                      if [ "$READY" = "true" ] && [ -n "$POD_UID" ] && [ "$POD_UID" != "$RECONCILED_UID" ]; then
+                          log "Pod $POD Ready (UID: $POD_UID) — waiting for k3k controller to finish..."
+
+                          ATTEMPTS=0
+                          while [ $ATTEMPTS -lt 30 ]; do
+                              STATUS=$(kubectl get clusters.k3k.io "$CLUSTER" -n "$NS" \
+                                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+                              if [ "$STATUS" = "Ready" ]; then
+                                  break
+                              fi
+                              ATTEMPTS=$((ATTEMPTS + 1))
+                              sleep 5
+                          done
+
+                          log "Cluster Ready, waiting 15s for cleanup to settle..."
+                          sleep 15
+
+                          reconcile_ingress
+                          set_state "$POD" "reconciled_uid" "$POD_UID"
+                      fi
+
+                      # --- Scenario 2: Flannel CrashLoopBackOff ---
+                      LAST_WAITING=$(get_state "$POD" "last_waiting")
+                      FLANNEL_UID=$(get_state "$POD" "flannel_uid")
+                      if [ "$WAITING" = "CrashLoopBackOff" ] && [ "$LAST_WAITING" != "CrashLoopBackOff" ] \
+                         && [ "$POD_UID" != "$FLANNEL_UID" ]; then
+                          log "CrashLoopBackOff detected on $POD (UID: $POD_UID)"
+                          recover_flannel "$POD"
+                          set_state "$POD" "flannel_uid" "$POD_UID"
+                      fi
+
+                      set_state "$POD" "last_waiting" "$WAITING"
+                  done
+
+                  sleep "$POLL_INTERVAL"
+              done
