@@ -1,0 +1,1 @@
+/home/rocky/data/rancher-k3k/lib.sh
