@@ -1,0 +1,18 @@
+---
+# PodDisruptionBudget for Rancher HA
+# Protects against voluntary disruptions (node drains, evictions) by ensuring
+# at least (replicas - 1) Rancher pods remain available at all times.
+# Applied outside the Rancher Helm chart (which has no PDB template).
+#
+# Placeholder replaced by deploy.sh:
+#   __PDB_MIN_AVAILABLE__  - Minimum pods that must remain available
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rancher-pdb
+  namespace: cattle-system
+spec:
+  minAvailable: __PDB_MIN_AVAILABLE__
+  selector:
+    matchLabels:
+      app: rancher

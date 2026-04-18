@@ -1,0 +1,31 @@
+name: Kubeconform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  kubeconform:
+    name: Kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+      - name: Validate rancher-k3k manifests
+        run: |
+          find rancher-k3k/ -name '*.yaml' \
+            -not -path '*/test/*' \
+            -not -name 'rancher-cluster.yaml' \
+            -exec kubeconform -strict -ignore-missing-schemas -summary {} +
+      - name: Validate rancher-vcluster manifests
+        run: |
+          if [ -d rancher-vcluster/ ]; then
+            find rancher-vcluster/ -name '*.yaml' \
+              -exec kubeconform -strict -ignore-missing-schemas -summary {} +
+          fi
