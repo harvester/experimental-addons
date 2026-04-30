@@ -19,7 +19,7 @@ spec:
   valuesContent: |-
     global:
       hostname: ""
-      rancherVersion: v2.13.1
+      rancherVersion: v2.14.0
       bootstrapPassword: ""
 
     sync:
@@ -34,7 +34,7 @@ spec:
           image:
             registry: ""
             repository: "rancher/k3s"
-            tag: "v1.34.2-k3s1"
+            tag: "v1.35.4-k3s1"
           securityContext: {}
           resources:
             limits:
