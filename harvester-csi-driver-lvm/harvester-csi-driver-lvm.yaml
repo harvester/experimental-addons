@@ -8,6 +8,6 @@ metadata:
 spec:
   enabled: false
   repo: https://charts.harvesterhci.io
-  version: 1.8.0
+  version: 1.8.1-dev.0
   chart: harvester-csi-driver-lvm
   valuesContent: ""
