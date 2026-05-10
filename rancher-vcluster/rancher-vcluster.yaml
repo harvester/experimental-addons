@@ -90,7 +90,7 @@ spec:
               targetNamespace: cert-manager
               repo: https://charts.jetstack.io
               chart: cert-manager
-              version: v1.5.1
+              version: v1.20.0
               helmVersion: v3
               set:
                 installCRDs: "true"
