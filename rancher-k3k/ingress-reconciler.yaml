@@ -1,0 +1,237 @@
+---
+# CronJob that reconciles the k3k Rancher host resources.
+#
+# Handles two failure modes that k3k does not manage:
+#
+# 1. Host Ingress deletion — The nginx Ingress can be deleted during Harvester
+#    upgrades, ingress-nginx reconciliation, or node drains. The CronJob
+#    recreates it if missing.
+#
+# 2. Flannel crash recovery — When the k3k server pod is rescheduled to a
+#    different node, flannel's network policy controller crashes due to stale
+#    node IP in etcd. The CronJob detects CrashLoopBackOff, confirms the
+#    flannel error, and deletes the pod to reset the backoff timer for faster
+#    recovery. It also ensures --disable-network-policy is set in serverArgs.
+#
+# 3. Etcd quorum deadlock (safety net) — When ALL HA server pods are in
+#    CrashLoopBackOff with "timed out waiting for node to change IP", sets
+#    recovery annotations and patches spec.servers=1 to trigger auto
+#    cluster-reset. The watcher Deployment owns the full recovery lifecycle.
+#
+# Usage:
+#   # Replace __HOSTNAME__ with your Rancher FQDN, then apply:
+#   sed 's|__HOSTNAME__|rancher.example.com|g' ingress-reconciler.yaml | kubectl apply -f -
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ingress-reconciler
+  namespace: rancher-k3k
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ingress-reconciler
+  namespace: rancher-k3k
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["k3k.io"]
+    resources: ["clusters"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ingress-reconciler
+  namespace: rancher-k3k
+subjects:
+  - kind: ServiceAccount
+    name: ingress-reconciler
+    namespace: rancher-k3k
+roleRef:
+  kind: Role
+  name: ingress-reconciler
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ingress-reconciler-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ingress-reconciler-nodes
+subjects:
+  - kind: ServiceAccount
+    name: ingress-reconciler
+    namespace: rancher-k3k
+roleRef:
+  kind: ClusterRole
+  name: ingress-reconciler-nodes
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingress-reconciler
+  namespace: rancher-k3k
+spec:
+  schedule: "*/5 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: ingress-reconciler
+          restartPolicy: Never
+          containers:
+            - name: reconciler
+              image: alpine/kubectl:1.34.2
+              command:
+                - sh
+                - -c
+                - |
+                  echo "=== Ingress reconciliation ==="
+
+                  # Ensure Service exists
+                  kubectl get svc rancher-k3k-traefik -n rancher-k3k &>/dev/null || {
+                    echo "Service missing, recreating..."
+                    kubectl apply -f - <<'SVC'
+                  apiVersion: v1
+                  kind: Service
+                  metadata:
+                    name: rancher-k3k-traefik
+                    namespace: rancher-k3k
+                  spec:
+                    type: ClusterIP
+                    selector:
+                      cluster: rancher
+                      role: server
+                    ports:
+                      - name: http
+                        port: 80
+                        targetPort: 80
+                      - name: https
+                        port: 443
+                        targetPort: 443
+                  SVC
+                  }
+
+                  # Ensure Ingress exists
+                  kubectl get ingress rancher-k3k-ingress -n rancher-k3k &>/dev/null || {
+                    echo "Ingress missing, recreating..."
+                    kubectl apply -f - <<'ING'
+                  apiVersion: networking.k8s.io/v1
+                  kind: Ingress
+                  metadata:
+                    name: rancher-k3k-ingress
+                    namespace: rancher-k3k
+                    annotations:
+                      nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+                  spec:
+                    ingressClassName: nginx
+                    tls:
+                      - hosts:
+                          - __HOSTNAME__
+                        secretName: tls-rancher-ingress
+                    rules:
+                      - host: __HOSTNAME__
+                        http:
+                          paths:
+                            - path: /
+                              pathType: Prefix
+                              backend:
+                                service:
+                                  name: rancher-k3k-traefik
+                                  port:
+                                    number: 443
+                  ING
+                  }
+
+                  echo "=== Flannel crash recovery ==="
+
+                  # Check all server pods for CrashLoopBackOff
+                  for POD in $(kubectl get pods -l "cluster=rancher,role=server" -n rancher-k3k -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+                    POD_STATUS=$(kubectl get pod "$POD" -n rancher-k3k -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+
+                    if [ "$POD_STATUS" = "CrashLoopBackOff" ]; then
+                      echo "$POD in CrashLoopBackOff, checking logs..."
+
+                      LOGS=$(kubectl logs "$POD" -n rancher-k3k --previous --tail=5 2>/dev/null || echo "")
+
+                      if echo "$LOGS" | grep -q "unable to initialize network policy controller"; then
+                        echo "Flannel network policy crash detected on $POD!"
+
+                        CURRENT_ARGS=$(kubectl get clusters.k3k.io rancher -n rancher-k3k -o jsonpath='{.spec.serverArgs}' 2>/dev/null || echo "")
+                        if ! echo "$CURRENT_ARGS" | grep -q "disable-network-policy"; then
+                          echo "Patching Cluster CR with --disable-network-policy..."
+                          kubectl patch clusters.k3k.io rancher -n rancher-k3k --type=merge \
+                            -p '{"spec":{"serverArgs":["--disable-network-policy"]}}'
+                        fi
+
+                        echo "Deleting $POD to reset backoff and apply new args..."
+                        kubectl delete pod "$POD" -n rancher-k3k --grace-period=0 2>/dev/null || true
+                      else
+                        echo "CrashLoopBackOff on $POD is not flannel-related, skipping"
+                      fi
+                    else
+                      echo "$POD is healthy (status: ${POD_STATUS:-Running})"
+                    fi
+                  done
+
+                  echo "=== Etcd deadlock check ==="
+
+                  # Count total server pods and CrashLoopBackOff pods
+                  TOTAL=0; CRASH=0; ETCD_TIMEOUT=false
+                  for POD in $(kubectl get pods -l "cluster=rancher,role=server" -n rancher-k3k -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+                    TOTAL=$((TOTAL + 1))
+                    WAIT_REASON=$(kubectl get pod "$POD" -n rancher-k3k \
+                      -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
+                    if [ "$WAIT_REASON" = "CrashLoopBackOff" ]; then
+                      CRASH=$((CRASH + 1))
+                      if kubectl logs "$POD" -n rancher-k3k --previous --tail=20 2>/dev/null \
+                          | grep -q "timed out waiting for node to change IP"; then
+                        ETCD_TIMEOUT=true
+                      fi
+                    fi
+                  done
+
+                  if [ "$TOTAL" -gt 1 ] && [ "$CRASH" -eq "$TOTAL" ] && [ "$ETCD_TIMEOUT" = "true" ]; then
+                    # Check if recovery is already in progress
+                    RECOVERY_STATE=$(kubectl get clusters.k3k.io rancher -n rancher-k3k \
+                      -o jsonpath='{.metadata.annotations.k3k\.example\.ch/etcd-recovery-state}' \
+                      2>/dev/null || echo "")
+                    if [ -z "$RECOVERY_STATE" ]; then
+                      echo "ETCD DEADLOCK DETECTED — triggering recovery"
+                      ORIGINAL_SERVERS=$(kubectl get clusters.k3k.io rancher -n rancher-k3k \
+                        -o jsonpath='{.spec.servers}' 2>/dev/null || echo "3")
+                      NOW_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                      kubectl annotate clusters.k3k.io rancher -n rancher-k3k --overwrite \
+                        "k3k.example.com/etcd-recovery-state=scaling-down" \
+                        "k3k.example.com/etcd-original-servers=$ORIGINAL_SERVERS" \
+                        "k3k.example.com/etcd-recovery-started=$NOW_TS"
+                      kubectl patch clusters.k3k.io rancher -n rancher-k3k --type=merge \
+                        -p '{"spec":{"servers":1}}'
+                      echo "Recovery triggered — watcher will drive the state machine"
+                    else
+                      echo "Etcd recovery already in progress (state=$RECOVERY_STATE)"
+                    fi
+                  else
+                    echo "No etcd deadlock (total=$TOTAL, crash=$CRASH, timeout=$ETCD_TIMEOUT)"
+                  fi
+
+                  echo "=== Reconciliation complete ==="

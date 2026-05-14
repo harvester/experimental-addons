@@ -1,0 +1,27 @@
+# mirror-registries.conf — Upstream registries to mirror through Harbor proxy cache
+#
+# One registry per line. Comments (#) and blank lines are ignored.
+# Each entry needs a matching proxy cache project in Harbor named after the registry.
+#
+# Usage: set MIRROR_REGISTRIES_FILE in deploy.conf to point to your copy:
+#   MIRROR_REGISTRIES_FILE="/path/to/mirror-registries.conf"
+#
+# If MIRROR_REGISTRIES_FILE is not set, no rewrites are applied (direct internet).
+
+# K3s system images, Rancher, Fleet
+docker.io
+
+# cert-manager (jetstack)
+quay.io
+
+# CloudNativePG, Zalando postgres-operator
+ghcr.io
+
+# Kubernetes system images (metrics-server, coredns, pause)
+registry.k8s.io
+
+# Google container images (legacy k8s images)
+gcr.io
+
+# Elasticsearch, Kibana
+docker.elastic.co

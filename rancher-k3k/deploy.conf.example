@@ -1,0 +1,125 @@
+# deploy.conf.example — Reference configuration for deploy.sh
+#
+# Usage: cp deploy.conf.example deploy.conf && vim deploy.conf
+#        ./deploy.sh -c deploy.conf
+#
+# All variables are optional unless marked (REQUIRED).
+# Unset variables use the script's built-in defaults.
+
+# =============================================================================
+# Core Settings
+# =============================================================================
+
+# (REQUIRED) Rancher hostname — must resolve to the Harvester VIP or load balancer
+HOSTNAME="rancher.example.com"
+
+# Bootstrap password for initial Rancher login (min 12 characters)
+BOOTSTRAP_PW="admin1234567"
+
+# Skip confirmation prompt (set to "yes" for non-interactive deploys)
+CONFIRM="yes"
+
+# =============================================================================
+# Storage
+# =============================================================================
+
+# PVC size for the k3k virtual cluster (format: <number>Gi|Ti|Mi)
+#   10Gi   - Minimum (single node only)
+#   50Gi   - Default (Rancher + basic monitoring)
+#   200Gi  - Rancher + Prometheus + Grafana + Loki
+#   500Gi  - Full observability stack with retention
+PVC_SIZE="50Gi"
+
+# Kubernetes storage class to use for the PVC
+STORAGE_CLASS="harvester-longhorn"
+
+# =============================================================================
+# HA Configuration
+# =============================================================================
+
+# Number of k3k server nodes (1 = single, 3 = HA with etcd cluster)
+# HA mode (3) also deploys a PodDisruptionBudget (minAvailable=2) and patches
+# the Rancher Deployment strategy to maxUnavailable=0 for zero-downtime upgrades.
+SERVER_COUNT=1
+
+# =============================================================================
+# Helm Chart Sources
+# =============================================================================
+
+# cert-manager chart source (HTTP repo URL or OCI URI)
+# CERTMANAGER_REPO="https://charts.jetstack.io"
+# CERTMANAGER_REPO="oci://harbor.example.com/charts/cert-manager"
+# CERTMANAGER_VERSION="v1.18.5"
+
+# Rancher chart source (HTTP repo URL or OCI URI)
+# RANCHER_REPO="https://releases.rancher.com/server-charts/latest"
+# RANCHER_REPO="oci://harbor.example.com/charts/rancher"
+# RANCHER_VERSION="v2.13.3"
+
+# k3k chart source (HTTP repo URL or OCI URI)
+# K3K_REPO="https://rancher.github.io/k3k"
+# K3K_REPO="oci://harbor.example.com/charts/k3k"
+# K3K_VERSION="1.0.2"
+
+# =============================================================================
+# TLS Certificate Source
+# =============================================================================
+
+# How Rancher gets its TLS certificate:
+#   rancher      - Self-signed CA (default, no external dependency)
+#   letsEncrypt  - Let's Encrypt (requires public DNS)
+#   secret       - User-provided TLS cert (or cert-manager CA Issuer, see below)
+TLS_SOURCE="rancher"
+
+# =============================================================================
+# CA Issuer — cert-manager signs Rancher's TLS cert with a signing CA
+# =============================================================================
+
+# Path to signing CA (intermediate) certificate PEM file.
+# Generate with the PKI repo: ./generate-ca.sh intermediate -n k3k-signing ...
+CA_CERT_PATH=""
+
+# Path to signing CA (intermediate) private key PEM file
+CA_KEY_PATH=""
+
+# Path to root CA certificate PEM file (trust anchor).
+# Rancher serves this at /cacerts so downstream agents trust the hierarchy.
+# If unset, falls back to CA_CERT_PATH with a warning (single-CA mode).
+CA_ROOT_PATH=""
+
+# When CA_CERT_PATH and CA_KEY_PATH are set:
+#   - TLS_SOURCE is automatically overridden to "secret"
+#   - cert-manager creates a CA Issuer and issues a leaf cert for HOSTNAME
+#   - The leaf cert auto-renews every ~75 days (90d duration, 15d renewBefore)
+#   - Rancher serves CA_ROOT_PATH at /cacerts for downstream agent trust
+
+# =============================================================================
+# Private Container Registry
+# =============================================================================
+
+# Registry host for pull-through cache (e.g. harbor.example.com)
+# Requires matching proxy cache projects in Harbor.
+PRIVATE_REGISTRY=""
+
+# File listing upstream registries to mirror (one per line, comments allowed).
+# See mirror-registries.example for the format.
+# If unset, no mirror rewrites — K3s pulls directly from the internet.
+# MIRROR_REGISTRIES_FILE="/path/to/mirror-registries.conf"
+
+# =============================================================================
+# Private CA Certificate (for registry/Helm repo TLS)
+# =============================================================================
+
+# Path to PEM-encoded CA bundle for internal TLS (registry, Helm repos).
+# This is separate from CA_CERT_PATH — this CA is for trusting your
+# private registry and Helm repos, not for signing Rancher's TLS cert.
+PRIVATE_CA_PATH=""
+
+# =============================================================================
+# Helm Repository Authentication
+# =============================================================================
+
+# Set to "yes" if your Helm repos require authentication
+# HELM_AUTH_NEEDED="yes"
+# HELM_REPO_USER="myuser"
+# HELM_REPO_PASS="mypassword"
