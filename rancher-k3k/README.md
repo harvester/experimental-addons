@@ -16,6 +16,7 @@ rancher:
   rancherVersion: "v2.14.0"
   replicas: 1
   bootstrapPassword: "your_secure_password"
+  repo: "rancherChartRepo"
 k3kCluster:
   servers: 1
   version: v1.35.4-k3s1
