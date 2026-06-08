@@ -20,7 +20,7 @@ spec:
     certManagerVersion: "v1.20.2"
     rancher:
       hostname: ""
-      rancherVersion: "v2.14.0"
+      version: "v2.14.0"
       replicas: 1
       bootstrapPassword: "password"
     k3kCluster:

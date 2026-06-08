@@ -13,7 +13,7 @@ Users can define the rancher version and rancher url via the `valuesContent` sec
 ```
 rancher:
   hostname: "rancher.harvester_vip.sslip.io"
-  rancherVersion: "v2.14.0"
+  version: "v2.14.0"
   replicas: 1
   bootstrapPassword: "your_secure_password"
   repo: "rancherChartRepo"
@@ -27,7 +27,7 @@ The k3k cluster will sync the ingress for the newly deployed rancher to the unde
 
 Users need to ensure that the `hostname` defined for accessing rancher is accessible via a DNS record pointing to the harvester vip.
 
-Updates to `rancherVersion` in the contentValues can be used to trigger rancher upgrades in the rancher installed in k3k.
+Updates to `version` in the contentValues can be used to trigger rancher upgrades in the rancher installed in k3k.
 
 Similar workflow can also be used to trigger k3s upgrades.
 
